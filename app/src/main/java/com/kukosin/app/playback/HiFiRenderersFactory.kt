@@ -12,7 +12,7 @@ import com.kukosin.app.audio.OboeAudioOutputProvider
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 
 /**
- * Cadena de audio: decoder → (futuro: EqAudioProcessor) →
+ * Cadena de audio: decoder → [EqAudioProcessor] (bypass si está apagado) →
  * [OboeAudioOutputProvider] → Oboe → DAC.
  *
  * No hay ramas por "driver": la única salida es Oboe, y el sink nunca convierte a
@@ -40,9 +40,8 @@ class HiFiRenderersFactory(context: Context) : NextRenderersFactory(context) {
         enableAudioTrackPlaybackParams: Boolean,
     ): AudioSink {
         val processors = ArrayList<AudioProcessor>()
-        // TODO(ronda EQ): acá entra el EqAudioProcessor cuando se porte el motor del
-        // ecualizador a esta rama. Hoy la cadena va sin DSP: el motor no procesa nada
-        // y el bit-perfect es memcpy puro.
+        // Único DSP del camino: el ecualizador. Apagado o plano = memcpy bit-exacto.
+        processors.add(EqAudioProcessor())
 
         val mode = AudioSettingsManager.configState.value.outputMode
         val builder = DefaultAudioSink.Builder(context)

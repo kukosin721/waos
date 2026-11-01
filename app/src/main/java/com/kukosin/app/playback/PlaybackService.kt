@@ -71,6 +71,9 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
         setMediaNotificationProvider(DefaultMediaNotificationProvider(this))
         AudioSettingsManager.init(this)
+        // El EQ debe estar cargado antes de construir el sink: el procesador lee su estado
+        // desde acá.
+        com.kukosin.app.eq.EqManager.init(this)
         recreatePlayer()
 
         // Sólo se reconstruye el player si cambió algo que afecta al AUDIO. Antes se

@@ -489,7 +489,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                     onMessage = { msg -> userMessage = msg },
                 )
 
-                AppSection.EQUALIZER -> PowerampEqualizerWorkspace(
+                AppSection.EQUALIZER -> EqualizerWorkspace(
                     bottomPadding = bottomPadding,
                     onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
                 )
@@ -2820,6 +2820,7 @@ private fun AudioSignalPathSheet(
                                         "No · modo Desactivado (mezclador Android)"
                                     engineStatus.builtinSpeaker ->
                                         "No · el altavoz interno no puede ser bit-perfect"
+                                    engineStatus.eqActive -> "No · ecualizador activo (DSP de 64 bits)"
                                     !engineInfo.opened -> "Sin stream"
                                     !engineInfo.exclusive -> "Compartido con el mezclador"
                                     engineInfo.converted -> "Convertido al formato del DAC"
@@ -3476,6 +3477,7 @@ private fun FullScreenSettingsScreen(
                                         engineStatus.bitPerfectNow -> "Sí · exclusivo, sin conversión, volumen 100 %"
                                         engineStatus.mode == OutputMode.DISABLED -> "No · modo Desactivado (mezclador Android)"
                                         engineStatus.builtinSpeaker -> "No · el altavoz interno no puede ser bit-perfect"
+                                        engineStatus.eqActive -> "No · ecualizador activo (DSP de 64 bits)"
                                         !engineInfo.opened -> "Sin stream abierto"
                                         !engineInfo.exclusive -> "No · el mezclador comparte la salida"
                                         engineInfo.converted -> "No · convertido al formato del DAC"

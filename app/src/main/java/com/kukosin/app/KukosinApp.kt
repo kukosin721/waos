@@ -23,6 +23,7 @@ class KukosinApp : Application(), ImageLoaderFactory {
         // Color de acento guardado por el usuario, antes de que se dibuje cualquier pantalla.
         AccentTheme.init(this)
         LibraryInsights.init(this)
+        com.kukosin.app.eq.EqManager.init(this)
     }
 
     override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)

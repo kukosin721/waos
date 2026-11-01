@@ -15,11 +15,23 @@ data class AudioStatus(
     val message: String? = null,
 ) {
     /**
-     * Bit-perfect **verificado**: exclusivo, sin conversión, volumen al 100 % y sobre
-     * una salida que puede serlo (jack, línea o DAC USB; jamás el altavoz interno).
+     * El ecualizador está metiendo DSP ahora mismo. Apagado o con la curva plana el
+     * procesador no toca ni un byte (bypass), así que no rompe el bit-perfect.
+     */
+    val eqActive: Boolean
+        get() = try {
+            com.kukosin.app.eq.EqManager.snapshot.isProcessing
+        } catch (_: Throwable) {
+            false
+        }
+
+    /**
+     * Bit-perfect **verificado**: exclusivo, sin conversión, volumen al 100 %, sin EQ
+     * encendido y sobre una salida que puede serlo (jack, línea o DAC USB; jamás el
+     * altavoz interno).
      */
     val bitPerfectNow: Boolean
-        get() = info.bitPerfect && mode.usesEngine && !builtinSpeaker
+        get() = info.bitPerfect && mode.usesEngine && !builtinSpeaker && !eqActive
 }
 
 /**
