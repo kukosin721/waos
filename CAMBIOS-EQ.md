@@ -89,7 +89,7 @@ alternativa abierta (Manrope, Inter, Poppins) y **sólo** se toca `Type.kt`
 
 ## 6. Tests
 
-`app/src/test/java/com/kukosin/app/EqFilterTest.kt`, 15 casos (JVM puro, sin Android):
+`app/src/test/java/com/kukosin/app/EqFilterTest.kt`, 18 casos (JVM puro, sin Android):
 
 - campana: pega exacto en el centro, simétrica al cortar, transparente lejos del centro;
 - 0 dB = bypass exacto;
@@ -108,9 +108,61 @@ alternativa abierta (Manrope, Inter, Poppins) y **sólo** se toca `Type.kt`
 
 Y no quedó sólo escrito: en el sandbox **bajé el compilador de Kotlin 2.2.10 y JUnit 4.13.2,
 compilé `eq/` (sin `EqManager`, que necesita Android) y corrí los tests de verdad**.
-Resultado: `EqFilterTest` (15) + `FftTest` (6) = **21 tests, todos en verde**, sin warnings
+Resultado: `EqFilterTest` (18) + `FftTest` (6) = **24 tests, todos en verde**, sin warnings
 de compilación del motor. La UI no se puede compilar acá (necesita el SDK de Android),
 pero la matemática del EQ y la FFT están verificadas ejecutándose.
+
+## 6.b Perfiles por salida (nuevo)
+
+Antes había **una** curva para todo. Ahora hay tres perfiles, cada uno con su propio
+estado (encendido, preamp, bandas, tipo de filtro y preset):
+
+| Perfil | Cuándo se activa |
+|---|---|
+| `Altavoz` | salida interna del teléfono (`OutputDevice.isBuiltin`) |
+| `Auriculares / línea` | jack, USB-C sin DAC propio, cualquier salida que no sea altavoz ni USB |
+| `DAC USB` | `isUsb` o `isDac` reportado por `AudioRoute` |
+
+- La app **cambia de perfil sola** cuando cambia la salida (`LaunchedEffect` sobre
+  `AudioRoute.current`); no hay que tocar nada.
+- Se persiste por perfil, con claves con prefijo (`usb_gain_0`, `wired_type_3`, …).
+- **Migración**: si venías del formato viejo (una sola curva sin prefijo), se copia
+  una vez al perfil de auriculares. Nadie pierde lo que ya había configurado.
+- El hilo de audio no cambia: sigue leyendo `EqManager.snapshot`, que ahora apunta al
+  perfil activo.
+- La pantalla del EQ muestra el perfil activo en el subtítulo del encabezado
+  ("10 bandas · Q constante · 64-bit · DAC USB").
+
+## 6.c Tipo de filtro por banda (nuevo)
+
+En el editor de banda (plegable "Frecuencia y Q de la banda") ahora hay un selector
+**Shelf graves · Campana · Shelf agudos**. Al cambiarlo se ajusta la Q a un valor
+razonable para ese tipo (1,41 para campana, 0,71 para shelf) y el preset pasa a
+"Personalizado". `EqSettings.withBandType()` es el que hace el trabajo.
+
+## 6.d Verificación sin Android (`tools/`)
+
+`EqManager` no depende de nada del sistema salvo `SharedPreferences`, así que se puede
+probar de verdad con stubs mínimos:
+
+- `tools/android-stubs/android/content/{Context,SharedPreferences}.java`
+- `tools/EqProfileHarness.kt` — banco de pruebas con un `SharedPreferences` en memoria
+- `tools/check-eq.sh` — compila todo y lo corre
+
+Qué verifica el banco (14 comprobaciones, todas en verde):
+
+1. la migración del formato viejo copia `enabled`, preamp y ganancias al perfil de
+   auriculares;
+2. cambiar a USB arranca ese perfil plano, sin tocar el de auriculares;
+3. aplicar ganancia y tipo de banda escribe en el perfil activo;
+4. `snapshot` (lo que lee el hilo de audio) sigue al perfil activo en los dos sentidos;
+5. el altavoz tiene su propio estado en cero;
+6. al volver a USB, su curva está intacta;
+7. las claves persistidas quedan con el prefijo correcto y no se pisan entre perfiles.
+
+```bash
+KC=/ruta/a/kotlinc COROUTINES=/ruta/a/kotlinx-coroutines-core-jvm.jar tools/check-eq.sh
+```
 
 ## 7. Qué probar en el teléfono (no pude compilar acá)
 
@@ -126,16 +178,21 @@ En el sandbox no hay JDK 17 ni SDK de Android, así que esto se verifica en tu b
 5. Con EQ activo: Ajustes → Audio y la ruta de señal dicen "No · ecualizador activo".
 6. Presets: aplicar "Bajos" con headroom automático no clipea (el vúmetro no se pone rojo).
 7. Cerrar y abrir la app: el EQ recuerda estado, preamp, ganancias y preset.
-8. Todo lo que ya andaba sigue andando: animación swipe de YTM, mini player ↔ player,
+8. **Perfiles**: con auriculares puestos, subí los graves y fijate que el subtítulo
+   diga "Auriculares / línea". Desenchufá (o pasá al altavoz): el EQ tiene que cambiar
+   a "Altavoz" con su propia curva, y al volver a enchufar tiene que volver la tuya.
+9. **Tipo de filtro**: en el editor de banda, tocá "Shelf graves" y mirá cómo cambia la
+   forma de la curva en el extremo.
+10. Todo lo que ya andaba sigue andando: animación swipe de YTM, mini player ↔ player,
    secciones estilo Poweramp, cola (`QueueSheet`), slider de onda, resampler sinc, USB DAC.
 
 ## 8. Pendientes conscientes (nada de humo)
 
-- **Perfiles por salida**: el EQ es uno solo, no distingue jack / USB DAC / altavoz.
-  Es lo próximo que valdría la pena, pero es una decisión de producto (¿cuántos
-  perfiles?, ¿se cambia solo al enchufar?) y no lo invento por mi cuenta.
-- **Medición de sala / EQ paramétrico libre**: proyecto aparte, no un ajuste.
-- El editor de bandas permite cambiar frecuencia y Q, pero **no** el tipo de filtro
-  (shelf vs campana) desde la UI; los shelves quedan en las puntas.
+- **Medición de sala / EQ paramétrico libre** (más bandas, curvas dibujadas a mano):
+  proyecto aparte, no un ajuste.
+- **Perfiles manuales con nombre propio**: hoy son tres automáticos por tipo de salida.
+  Si querés "mis auriculares del laburo" y "los del auto" con nombre, es otro paso.
 - El recorte de bits ("el archivo tiene 24: el decoder está recortando") depende del
   decoder elegido: la app lo informa, no lo arregla.
+- Sigue sin compilarse la app completa acá (no hay SDK de Android); ver 6.d para lo
+  que sí se ejecutó.

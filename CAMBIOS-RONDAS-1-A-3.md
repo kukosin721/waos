@@ -78,12 +78,24 @@ Esta rama no usa Piped: usa `NewPipeDownloader` y resuelve el audio de verdad an
 encolar, con `describeYtmError` para explicar el fallo en castellano. No había nada
 que traer.
 
-## 8. Orden interno (partir `PlayerApp`) — **no se toca**
+## 8. Orden interno (partir `PlayerApp`) — **hecho**
 
-La serie vieja partió su `PlayerApp` en 8 archivos porque crecía sin control. Esta
-rama tiene otra organización (monolito + `PowerampSections` + `QueueSheet` +
-`LyricsPanel` ahora) y partirla a mitad del proyecto, sin compilar acá, sería el
-cambio más riesgoso de todos y sin beneficio visible. Queda como deuda consciente.
+`PlayerApp.kt` tenía **3.963 líneas**. Quedó partido en cinco archivos, todos en el
+mismo paquete `com.kukosin.app.ui` (así no hubo que tocar imports entre archivos):
+
+| Archivo | Líneas | Qué tiene |
+|---|---|---|
+| `PlayerApp.kt` | 1.062 | raíz (`PlayerApp`), estado de reproducción, `PlaybackSnapshot`, arranque de la cola |
+| `LibraryViews.kt` | 991 | buscador, lista de canciones y su fila, álbumes/artistas/carpetas, YT Music, estados vacíos |
+| `PlayerViews.kt` | 1.168 | mini reproductor, reproductor grande, carátula compartida y morphing, interpoladores |
+| `Sheets.kt` | 857 | ruta de señal, detalle de álbum/artista, inspector de metadatos |
+| `SettingsScreen.kt` | 895 | ajustes completos y utilidades de permisos |
+
+Las funciones de nivel superior pasaron de `private` a `internal` para poder cruzarse
+entre archivos. Se verificó: balance de llaves/paréntesis en los cinco archivos, cero
+declaraciones duplicadas en el paquete y cero errores de sintaxis compilando el paquete
+`ui/` completo con `kotlinc` (los *unresolved reference* son esperables: sin el SDK de
+Android no hay Compose).
 
 ## 9. Tests — **ampliados**
 
@@ -120,13 +132,17 @@ En esta rama las letras se abren **dentro** del reproductor grande, que ya tiene
 controles y la barra de onda. Agregar un mini reproductor ahí adentro sería duplicar
 controles en la misma pantalla.
 
-## 12. Tocar la carátula = ir a la biblioteca — **no aplicado a propósito**
+## 12. Tocar la carátula = ir a la biblioteca — **hecho**
 
-En esta rama la carátula ya tiene su propio mapa de gestos, y está bueno: **tap =
-letras**, **horizontal = cambiar de tema**, **abajo = minimizar**. Cambiar el tap por
-"ir a la biblioteca en esta canción" rompería ese diseño y además pide scroll-to +
-resaltado dentro del reproductor. Si lo querés igual, se hace, pero es una decisión
-tuya, no un bug.
+- Tocar la carátula ahora **cierra el reproductor, abre Biblioteca → Todas las
+  canciones y desplaza la lista hasta la pista que está sonando**, que queda
+  **resaltada en dorado** un par de segundos y se apaga sola.
+- Las letras siguen a un toque: hay un botón **"Ver letras"** debajo del chip de
+  calidad, y el gesto de deslizar hacia arriba sigue igual.
+- El texto de ayuda de la carátula y la descripción de accesibilidad dicen lo que
+  pasa ahora, sin mentir.
+- El resaltado no se come el resto de la fila: es una capa dorada con `alpha`
+  animada y se limpia a los 1,9 s.
 
 ## 13. Búsqueda con teclado inmediato — **hecho**
 
@@ -172,10 +188,14 @@ sería un dock que se esconde justo cuando lo querés usar.
 cambiar de tema, arriba = letras, abajo = minimizar, con umbral y vuelta elástica. La
 versión vieja sólo hacía izquierda/derecha. No lo toqué.
 
-## 18. Ecualizador — **entregado** (commit `179fbad`)
+## 18. Ecualizador — **entregado** (`179fbad`) **y ampliado**
 
 Motor de 10 bandas en 64 bits, pantalla nueva, presets, headroom automático, vúmetro,
-y el arreglo del bug de escala de la rejilla. `EqFilterTest` con 15 casos.
+y el arreglo del bug de escala de la rejilla. `EqFilterTest` con 18 casos.
+
+Ampliado en esta tanda: **perfiles por salida** (altavoz / auriculares / DAC USB, se
+cambian solos y cada uno guarda su curva) y **tipo de filtro editable por banda**
+(shelf graves, campana, shelf agudos). Detalle y verificación en `CAMBIOS-EQ.md`.
 
 ## 19. Remuestreador — **ya estaba**
 
@@ -220,8 +240,11 @@ alineadas, y los patches aplican limpio en un clon vacío.
 
 ## Pendientes conscientes
 
-- No compilé (ver ítem 25). Si Gradle se queja, pegámelo y lo arreglo en el momento.
-- Item 12 (tap en la carátula → biblioteca) está sin hacer por decisión de diseño: si
-  lo querés, se implementa.
-- Item 8 (partir `PlayerApp`) queda como deuda; hoy son ~4.000 líneas.
-- Item 15 (dock retráctil) no aplica a la estructura de esta rama.
+- **Compilar la app entera**: no hay SDK de Android en el sandbox. Lo que sí se
+  verificó está en la sección de verificación; si Gradle se queja, con el log lo
+  arreglo al toque.
+- **Ítem 15** (dock retráctil) no aplica a esta estructura (barra fija de 4 accesos +
+  mini reproductor). Si lo querés igual, se hace, pero quedaría escondido justo
+  cuando lo estás usando.
+- Perfiles del EQ: quedaron **tres** (altavoz / auriculares / DAC USB) y cambian solos.
+  Si querés perfiles manuales con nombre propio, es otro paso.
