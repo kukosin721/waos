@@ -59,10 +59,13 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Usb
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -259,6 +262,7 @@ internal fun PowerampLibraryWorkspace(
     onNavigateUpFolder: () -> Unit,
     onInspectTrack: (Track) -> Unit,
     onMessage: (String) -> Unit,
+    onSortChange: (LibrarySort) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val activeCategory = library.activeCategory
@@ -574,6 +578,10 @@ internal fun PowerampLibraryWorkspace(
                                     Spacer(Modifier.width(6.dp))
                                     Text("Aleatorio", color = Gold, fontWeight = FontWeight.Bold)
                                 }
+                                SortMenuButton(
+                                    current = library.sortMode,
+                                    onSelect = onSortChange,
+                                )
                             }
                             TrackList(
                                 tracks = library.filteredTracks,
@@ -585,6 +593,7 @@ internal fun PowerampLibraryWorkspace(
                                 onMessage = onMessage,
                                 modifier = Modifier.weight(1f),
                                 bottomPadding = bottomPadding,
+                                indexSort = library.sortMode,
                             )
                         }
 
@@ -1276,7 +1285,8 @@ internal fun PowerampSearchWorkspace(
             if (!hasPermission) {
                 PermissionCard(onGrant = onRequestPermission)
             } else {
-                SearchField(query = library.query, onQueryChange = onQueryChange)
+                // Pantalla de búsqueda: el campo pide foco y teclado al abrirse.
+                SearchField(query = library.query, onQueryChange = onQueryChange, autoFocus = true)
                 val q = library.query.trim()
                 if (q.isNotEmpty() && library.filteredAlbums.isNotEmpty()) {
                     LazyRow(
@@ -1358,6 +1368,49 @@ internal fun PowerampSearchWorkspace(
                     onMessage = onMessage,
                     modifier = Modifier.weight(1f),
                     bottomPadding = bottomPadding,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Menú de orden de la lista.
+ *
+ * Se aplica en el ViewModel, así que también cambia el orden de lo que se manda al
+ * reproductor: la canción que tocás es la que suena.
+ */
+@Composable
+private fun SortMenuButton(current: LibrarySort, onSelect: (LibrarySort) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(
+            onClick = { open = true },
+            border = BorderStroke(1.dp, Gold.copy(alpha = 0.6f)),
+            shape = RoundedCornerShape(12.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Icon(Icons.Rounded.Sort, contentDescription = "Ordenar la lista", tint = Gold, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(current.shortLabel, color = Gold, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+        ) {
+            LibrarySort.values().forEach { option ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            option.label,
+                            color = if (option == current) Gold else Ink,
+                            fontWeight = if (option == current) FontWeight.Bold else FontWeight.Normal,
+                        )
+                    },
+                    onClick = {
+                        onSelect(option)
+                        open = false
+                    },
                 )
             }
         }

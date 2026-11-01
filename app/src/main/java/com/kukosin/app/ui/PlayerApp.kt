@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -123,6 +124,8 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
@@ -138,6 +141,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -487,6 +491,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                     onNavigateUpFolder = { viewModel.navigateUpFolder() },
                     onInspectTrack = viewModel::setInspectTrack,
                     onMessage = { msg -> userMessage = msg },
+                    onSortChange = viewModel::setSortMode,
                 )
 
                 AppSection.EQUALIZER -> EqualizerWorkspace(
@@ -979,15 +984,39 @@ private fun rememberPlaybackState(
 }
 
 @Composable
-internal fun SearchField(query: String, onQueryChange: (String) -> Unit) {
+internal fun SearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    autoFocus: Boolean = false,
+) {
+    // La búsqueda pide foco (y teclado) al abrirse sólo en la pantalla de búsqueda:
+    // en las listas, el campo es un filtro y no queremos que salte el teclado solo.
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(autoFocus) {
+        if (autoFocus) {
+            runCatching { focusRequester.requestFocus() }
+            keyboard?.show()
+        }
+    }
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 8.dp),
+            .padding(horizontal = 24.dp, vertical = 8.dp)
+            .focusRequester(focusRequester),
         placeholder = { Text("Buscar canción, artista, álbum o formato") },
         leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = CreamMuted) },
+        trailingIcon = if (query.isNotEmpty()) {
+            {
+                IconButton(onClick = { onQueryChange("") }) {
+                    Icon(Icons.Rounded.Close, contentDescription = "Limpiar la búsqueda", tint = CreamMuted)
+                }
+            }
+        } else {
+            null
+        },
         singleLine = true,
         shape = RoundedCornerShape(18.dp),
         colors = OutlinedTextFieldDefaults.colors(
@@ -1230,27 +1259,72 @@ internal fun TrackList(
     extraLabel: ((Track) -> String)? = null,
     modifier: Modifier = Modifier,
     bottomPadding: Int,
+    indexSort: LibrarySort? = null,
 ) {
     if (tracks.isEmpty()) {
         EmptyLibrary(hasQuery = true)
         return
     }
-    LazyColumn(
-        modifier = modifier,
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = bottomPadding.dp, top = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        itemsIndexed(tracks, key = { _, track -> track.uri.toString() }) { index, track ->
-            TrackRow(
-                track = track,
-                selected = track.uri == currentUri,
-                isPlaying = isPlaying && track.uri == currentUri,
-                controller = controller,
-                onClick = { onTrackClick(index) },
-                onInspect = { onInspectClick(track) },
-                onMessage = onMessage,
-                extraLabel = extraLabel?.invoke(track),
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    var activeLetter by remember { mutableStateOf<Char?>(null) }
+
+    // El índice A–Z sólo tiene sentido con orden alfabético y una lista que lo amerite.
+    val sections = remember(tracks, indexSort) {
+        if (indexSort != null && indexSort.isAlphabetical && tracks.size >= 20) {
+            letterSections(tracks) { indexSort.sortKey(it) }
+        } else {
+            null
+        }
+    }
+
+    Box(modifier = modifier) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = if (sections != null) 30.dp else 16.dp,
+                bottom = bottomPadding.dp,
+                top = 8.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            itemsIndexed(tracks, key = { _, track -> track.uri.toString() }) { index, track ->
+                TrackRow(
+                    track = track,
+                    selected = track.uri == currentUri,
+                    isPlaying = isPlaying && track.uri == currentUri,
+                    controller = controller,
+                    onClick = { onTrackClick(index) },
+                    onInspect = { onInspectClick(track) },
+                    onMessage = onMessage,
+                    extraLabel = extraLabel?.invoke(track),
+                )
+            }
+        }
+
+        if (sections != null) {
+            val (letters, positions) = sections
+            AlphabetIndexBar(
+                letters = letters,
+                onSelect = { letter ->
+                    positions[letter]?.let { target ->
+                        scope.launch { listState.scrollToItem(target) }
+                    }
+                },
+                onActiveChange = { activeLetter = it },
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .padding(end = 2.dp),
             )
+            activeLetter?.let { letter ->
+                ActiveLetterBubble(
+                    letter = letter,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
         }
     }
 }

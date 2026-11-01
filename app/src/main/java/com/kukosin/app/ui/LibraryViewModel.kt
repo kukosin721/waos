@@ -1,6 +1,7 @@
 package com.kukosin.app.ui
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kukosin.app.data.AlbumGroup
@@ -16,11 +17,14 @@ import com.kukosin.app.data.ytm.YtmTrack
 import com.kukosin.app.data.ytm.describeYtmError
 import com.kukosin.app.playback.AudioConfig
 import com.kukosin.app.playback.AudioSettingsManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -62,6 +66,7 @@ data class LibraryUiState(
     val isScanning: Boolean = false,
     val hasScanned: Boolean = false,
     val error: String? = null,
+    val sortMode: LibrarySort = LibrarySort.TITULO,
 ) {
     val currentFolder: FolderNode?
         get() = folderPath.lastOrNull() ?: rootFolder
@@ -155,10 +160,15 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val hasScanned = MutableStateFlow(false)
     private val error = MutableStateFlow<String?>(null)
     private val analysis = MutableStateFlow<AudioAnalysis?>(null)
+    private val sortPrefs = application.getSharedPreferences("kukosin_library_sort", Context.MODE_PRIVATE)
+    private val sortMode = MutableStateFlow(
+        runCatching { LibrarySort.valueOf(sortPrefs.getString(KEY_SORT, null) ?: "") }
+            .getOrDefault(LibrarySort.TITULO),
+    )
     private var analysisJob: Job? = null
     private var ytmSearchJob: Job? = null
 
-    val uiState: StateFlow<LibraryUiState> = combine(
+    private val combinedState: Flow<LibraryUiState> = combine(
         combine(tracks, albums, artists, rootFolder, folderPath) { tr, al, ar, rf, fp ->
             Tuple5(tr, al, ar, rf, fp)
         },
@@ -199,13 +209,29 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             hasScanned = hasSc,
             error = err,
         )
-    }.stateIn(
-        viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
-        LibraryUiState(),
-    )
+    }
+
+    /**
+     * El orden se aplica acá y no en la UI: así la lista que se ve y la que se
+     * manda al reproductor son exactamente la misma.
+     */
+    val uiState: StateFlow<LibraryUiState> = combine(combinedState, sortMode) { state, mode ->
+        state.copy(tracks = sortTracks(state.tracks, mode), sortMode = mode)
+        // El orden corre fuera del hilo principal: con 10.000 canciones, ordenar en
+        // cada tecla de la búsqueda se sentiría.
+    }.flowOn(Dispatchers.Default)
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            LibraryUiState(),
+        )
 
     val analysisState: StateFlow<AudioAnalysis?> = analysis
+
+    fun setSortMode(mode: LibrarySort) {
+        sortMode.value = mode
+        sortPrefs.edit().putString(KEY_SORT, mode.name).apply()
+    }
 
     fun openLibraryRoot() {
         activeCategory.value = null
@@ -395,6 +421,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         folderPath.value = restored
     }
 }
+
+/** Clave de prefs del criterio de orden elegido. */
+private const val KEY_SORT = "library_sort_mode"
 
 private data class Tuple4<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 private data class Tuple5<A, B, C, D, E>(val a: A, val b: B, val c: C, val d: D, val e: E)
