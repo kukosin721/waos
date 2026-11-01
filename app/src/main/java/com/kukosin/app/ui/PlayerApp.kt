@@ -98,7 +98,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -535,6 +534,14 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             track = sheetTrack,
             isPlaying = playback.isPlaying,
             progress = playback.progress,
+            durationMs = playback.durationMs,
+            onSeek = { fraction ->
+                val player = controller
+                val total = player?.duration ?: 0L
+                if (player != null && total > 0L) {
+                    player.seekTo((total * fraction.coerceIn(0f, 1f)).toLong())
+                }
+            },
             isDac = output.isDac,
             sheetProgress = sheetProgress,
             onToggle = {
@@ -928,6 +935,8 @@ private data class PlaybackSnapshot(
     val current: Track?,
     val isPlaying: Boolean,
     val progress: Float,
+    /** Duración real de lo que está sonando, para la barra del mini reproductor. */
+    val durationMs: Long = 0L,
     /** Último error del reproductor (p. ej. un stream de YouTube Music que no se pudo resolver). */
     val error: String? = null,
 )
@@ -941,6 +950,7 @@ private fun rememberPlaybackState(
     var currentItem by remember { mutableStateOf<MediaItem?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
+    var durationMs by remember { mutableStateOf(0L) }
     var playError by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(controller) {
@@ -970,6 +980,7 @@ private fun rememberPlaybackState(
         val player = controller ?: return@LaunchedEffect
         while (isActive) {
             val duration = player.duration.coerceAtLeast(0)
+            durationMs = duration
             progress = if (duration > 0) player.currentPosition.toFloat() / duration else 0f
             delay(400)
         }
@@ -980,7 +991,7 @@ private fun rememberPlaybackState(
     val current = tracks.firstOrNull { it.uri.toString() == mediaId }
         ?: currentItem?.takeIf { it.localConfiguration?.uri?.scheme == YtmService.STREAM_SCHEME }
             ?.toStreamTrack()
-    return PlaybackSnapshot(current, isPlaying, progress, playError)
+    return PlaybackSnapshot(current, isPlaying, progress, durationMs, playError)
 }
 
 @Composable
@@ -1866,6 +1877,8 @@ private fun MiniPlayer(
     track: Track?,
     isPlaying: Boolean,
     progress: Float,
+    durationMs: Long,
+    onSeek: (Float) -> Unit,
     isDac: Boolean,
     sheetProgress: Float,
     onToggle: () -> Unit,
@@ -1916,11 +1929,12 @@ private fun MiniPlayer(
             shadowElevation = 12.dp,
         ) {
             Column {
-                LinearProgressIndicator(
-                    progress = { progress.coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth(),
-                    color = Gold,
-                    trackColor = Ink,
+                CompactSeekBar(
+                    progress = progress,
+                    durationMs = durationMs,
+                    enabled = sheetProgress < 0.08f,
+                    onSeek = onSeek,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
                 )
                 Row(
                     modifier = Modifier
