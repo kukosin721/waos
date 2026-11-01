@@ -89,7 +89,7 @@ alternativa abierta (Manrope, Inter, Poppins) y **sólo** se toca `Type.kt`
 
 ## 6. Tests
 
-`app/src/test/java/com/kukosin/app/EqFilterTest.kt`, 16 casos (JVM puro, sin Android):
+`app/src/test/java/com/kukosin/app/EqFilterTest.kt`, 15 casos (JVM puro, sin Android):
 
 - campana: pega exacto en el centro, simétrica al cortar, transparente lejos del centro;
 - 0 dB = bypass exacto;
@@ -105,6 +105,12 @@ alternativa abierta (Manrope, Inter, Poppins) y **sólo** se toca `Type.kt`
 ```bash
 ./gradlew testDebugUnitTest --tests "com.kukosin.app.EqFilterTest"
 ```
+
+Y no quedó sólo escrito: en el sandbox **bajé el compilador de Kotlin 2.2.10 y JUnit 4.13.2,
+compilé `eq/` (sin `EqManager`, que necesita Android) y corrí los tests de verdad**.
+Resultado: `EqFilterTest` (15) + `FftTest` (6) = **21 tests, todos en verde**, sin warnings
+de compilación del motor. La UI no se puede compilar acá (necesita el SDK de Android),
+pero la matemática del EQ y la FFT están verificadas ejecutándose.
 
 ## 7. Qué probar en el teléfono (no pude compilar acá)
 

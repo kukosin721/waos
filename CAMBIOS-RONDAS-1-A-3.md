@@ -94,7 +94,7 @@ cambio más riesgoso de todos y sin beneficio visible. Queda como deuda conscien
   del análisis **no** deben cortar la reproducción; los de audio sí deben cambiarla.
 - `LibrarySortTest` (nuevo): los cinco criterios de orden, el índice alfabético y el
   recorte de tildes.
-- `EqFilterTest` (16 casos) y `LyricsParseTest`: ya estaban.
+- `EqFilterTest` (15 casos) y `LyricsParseTest`: ya estaban.
 
 ```bash
 ./gradlew testDebugUnitTest
@@ -175,7 +175,7 @@ versión vieja sólo hacía izquierda/derecha. No lo toqué.
 ## 18. Ecualizador — **entregado** (commit `179fbad`)
 
 Motor de 10 bandas en 64 bits, pantalla nueva, presets, headroom automático, vúmetro,
-y el arreglo del bug de escala de la rejilla. `EqFilterTest` con 16 casos.
+y el arreglo del bug de escala de la rejilla. `EqFilterTest` con 15 casos.
 
 ## 19. Remuestreador — **ya estaba**
 
@@ -190,7 +190,10 @@ selector de decodificador con la verdad de bits y aviso de xrun.
 
 ## 25. Primera compilación real — **pendiente tuya**
 
-En el sandbox no hay JDK 17 ni SDK de Android, así que **no compilé**. Todo lo que
+No hay SDK de Android en el sandbox, así que **la app completa no la compilé**. Pero
+sí bajé el compilador de Kotlin 2.2.10 y JUnit 4.13.2 y **compilé y corrí de verdad** la
+parte que no depende de Android: `eq/Biquad.kt`, `eq/EqModel.kt`, `eq/EqEngine.kt`,
+`data/analysis/Fft.kt` y sus tests → **21 tests en verde** (15 de EQ + 6 de FFT). Todo lo que
 puedo verificar sin compilador está verificado: balance de llaves/paréntesis en los 60
 archivos Kotlin, cero declaraciones duplicadas en el paquete `ui`, firmas y llamadas
 alineadas, y los patches aplican limpio en un clon vacío.
