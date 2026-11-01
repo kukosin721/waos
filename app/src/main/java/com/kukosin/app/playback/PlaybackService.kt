@@ -1,5 +1,6 @@
 package com.kukosin.app.playback
 
+import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import androidx.core.net.toUri
@@ -237,6 +238,20 @@ class PlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
         return mediaSession
+    }
+
+    /**
+     * Si el usuario saca la app de recientes y no hay nada cargado en el reproductor,
+     * el servicio se apaga: no tiene sentido quedar vivo en segundo plano sin cola.
+     * Si hay algo cargado (aunque esté en pausa) no se toca, porque puede volver a
+     * sonar desde la notificación o desde Android Auto.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val currentPlayer = player
+        if (currentPlayer == null || currentPlayer.mediaItemCount == 0) {
+            stopSelf()
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {

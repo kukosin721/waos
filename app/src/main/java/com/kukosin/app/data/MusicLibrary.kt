@@ -442,41 +442,45 @@ object MusicLibrary {
 
         runCatching {
             val retriever = MediaMetadataRetriever()
-            retriever.setDataSource(context, track.uri)
+            try {
+                retriever.setDataSource(context, track.uri)
             
-            val mmrArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
-            if (!mmrArtist.isNullOrBlank()) albumArtist = mmrArtist
+                val mmrArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+                if (!mmrArtist.isNullOrBlank()) albumArtist = mmrArtist
             
-            val mmrGenre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)
-            if (!mmrGenre.isNullOrBlank()) genre = mmrGenre
+                val mmrGenre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)
+                if (!mmrGenre.isNullOrBlank()) genre = mmrGenre
 
-            val mmrComposer = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_COMPOSER)
-            if (!mmrComposer.isNullOrBlank()) composer = mmrComposer
+                val mmrComposer = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_COMPOSER)
+                if (!mmrComposer.isNullOrBlank()) composer = mmrComposer
 
-            val mmrTrack = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
-            if (!mmrTrack.isNullOrBlank()) {
-                val parsed = mmrTrack.substringBefore('/').toIntOrNull()
-                if (parsed != null && parsed > 0) trackNum = parsed
+                val mmrTrack = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
+                if (!mmrTrack.isNullOrBlank()) {
+                    val parsed = mmrTrack.substringBefore('/').toIntOrNull()
+                    if (parsed != null && parsed > 0) trackNum = parsed
+                }
+
+                val mmrDisc = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER)
+                if (!mmrDisc.isNullOrBlank()) {
+                    val parsed = mmrDisc.substringBefore('/').toIntOrNull()
+                    if (parsed != null && parsed > 0) discNum = parsed
+                }
+
+                val mmrYear = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
+                if (!mmrYear.isNullOrBlank()) {
+                    val parsed = mmrYear.take(4).toIntOrNull()
+                    if (parsed != null && parsed > 0) yearVal = parsed
+                }
+
+                val mmrBitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull()
+                if (bitrate <= 0 && mmrBitrate != null && mmrBitrate > 0) {
+                    bitrate = mmrBitrate
+                }
+            } finally {
+                // Se libera siempre: si setDataSource lanza, antes quedaba un
+                // retriever vivo por cada archivo (fuga de descriptores en escaneos grandes).
+                runCatching { retriever.release() }
             }
-
-            val mmrDisc = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER)
-            if (!mmrDisc.isNullOrBlank()) {
-                val parsed = mmrDisc.substringBefore('/').toIntOrNull()
-                if (parsed != null && parsed > 0) discNum = parsed
-            }
-
-            val mmrYear = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
-            if (!mmrYear.isNullOrBlank()) {
-                val parsed = mmrYear.take(4).toIntOrNull()
-                if (parsed != null && parsed > 0) yearVal = parsed
-            }
-
-            val mmrBitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull()
-            if (bitrate <= 0 && mmrBitrate != null && mmrBitrate > 0) {
-                bitrate = mmrBitrate
-            }
-
-            retriever.release()
         }
 
         return track.copy(
