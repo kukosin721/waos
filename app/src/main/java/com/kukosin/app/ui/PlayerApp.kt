@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -127,6 +128,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.media3.common.MediaItem
@@ -193,6 +196,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -216,6 +220,8 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
     var userMessage by remember { mutableStateOf<String?>(null) }
     // Pista a la que hay que llevar la biblioteca después de tocar la carátula.
     var libraryFocusUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    // Dock (mini reproductor) retráctil: se esconde al bajar en la lista y vuelve al subir.
+    var dockHidden by remember { mutableStateOf(false) }
 
     LaunchedEffect(userMessage) {
         if (userMessage != null) {
@@ -223,6 +229,40 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             userMessage = null
         }
     }
+
+    // Acumula el scroll del usuario para decidir si el dock se esconde. Umbral alto
+    // para abajo (no querés que se vaya por un toquecito) y bajo para arriba (volver
+    // tiene que ser inmediato).
+    val dockScroll = remember {
+        var acc = 0f
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): Offset {
+                acc = (acc + available.y).coerceIn(-400f, 400f)
+                if (acc > 140f) {
+                    dockHidden = true
+                    acc = 0f
+                } else if (acc < -50f) {
+                    dockHidden = false
+                    acc = 0f
+                }
+                return Offset.Zero
+            }
+        }
+    }
+
+    // Al cambiar de sección el dock siempre vuelve.
+    LaunchedEffect(activeSection) { dockHidden = false }
+
+    val dockOffset by animateDpAsState(
+        targetValue = if (dockHidden) 132.dp else 0.dp,
+        animationSpec = tween(durationMillis = 240),
+        label = "dockOffset",
+    )
+    val dockAlpha by animateFloatAsState(
+        targetValue = if (dockHidden) 0f else 1f,
+        animationSpec = tween(durationMillis = 200),
+        label = "dockAlpha",
+    )
 
     // El resaltado de la fila dura un par de segundos y se apaga solo.
     LaunchedEffect(libraryFocusUri) {
@@ -476,6 +516,9 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                // Sólo la biblioteca retrae el dock: en Ajustes o en el EQ esconder el
+                // mini reproductor al scrollear sólo molesta.
+                .then(if (activeSection == AppSection.LIBRARY) Modifier.nestedScroll(dockScroll) else Modifier)
                 .graphicsLayer {
                     val reveal = (1f - sheetProgress).coerceIn(0f, 1f)
                     alpha = reveal
@@ -617,6 +660,8 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .offset { IntOffset(0, dockOffset.roundToPx()) }
+                .graphicsLayer { alpha = dockAlpha }
                 .navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         )

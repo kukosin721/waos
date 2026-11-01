@@ -162,11 +162,24 @@ consulta.
   orden elegido) y **se oculta** cuando el orden no es alfabético (duración/año) o la
   lista es corta.
 
-## 15. Dock inferior con retracción — **no aplica**
+## 15. Dock inferior con retracción — **hecho, adaptado**
 
-Esta rama ya tiene una barra fija de cuatro accesos (`PlayerShortcutBar`) más el mini
-reproductor encima. Retraerla al scrollear choca con esa estructura; el resultado
-sería un dock que se esconde justo cuando lo querés usar.
+En esta rama no hay un dock de cuatro botones abajo de la biblioteca: esos accesos
+(`PlayerShortcutBar`) viven dentro del reproductor, y lo que flota abajo en la
+biblioteca es el **mini reproductor**. Así que la retracción se aplicó ahí:
+
+- Al **bajar** en la lista (140 dp acumulados de scroll del usuario) el mini reproductor
+  **se va hacia abajo y se desvanece** (`offset` animado 240 ms + alpha 200 ms).
+- Al **subir** vuelve al toque (umbral bajo, 50 dp): si querés el reproductor, aparece
+  con un gesto corto.
+- Al **cambiar de sección** vuelve siempre, y sólo se retrae en **Biblioteca**
+  (en Ajustes o en el EQ esconderlo al scrollear sería molestar, no ayudar).
+- Usa `Modifier.offset { }` en fase de layout y no `graphicsLayer`: así la medida de la
+  carátula que alimenta el morph mini → reproductor sigue siendo la real.
+- **Lo que no hice**: la fila de acciones rápidas (aleatorio · play · buscar ·
+  seleccionar) que aparecía en lugar del mini en la versión vieja. En esta rama esas
+  acciones ya están en el reproductor y duplicarlas abajo sumaba ruido. Si las querés,
+  se agregan.
 
 ## 16. Orden de la lista — **hecho**
 
@@ -243,8 +256,7 @@ alineadas, y los patches aplican limpio en un clon vacío.
 - **Compilar la app entera**: no hay SDK de Android en el sandbox. Lo que sí se
   verificó está en la sección de verificación; si Gradle se queja, con el log lo
   arreglo al toque.
-- **Ítem 15** (dock retráctil) no aplica a esta estructura (barra fija de 4 accesos +
-  mini reproductor). Si lo querés igual, se hace, pero quedaría escondido justo
-  cuando lo estás usando.
+- **Ítem 15**: la retracción quedó en el mini reproductor (ver arriba). Las acciones
+  rápidas que en la versión vieja ocupaban su lugar no se agregaron.
 - Perfiles del EQ: quedaron **tres** (altavoz / auriculares / DAC USB) y cambian solos.
   Si querés perfiles manuales con nombre propio, es otro paso.
