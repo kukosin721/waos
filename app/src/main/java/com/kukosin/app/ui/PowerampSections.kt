@@ -263,6 +263,8 @@ internal fun PowerampLibraryWorkspace(
     onInspectTrack: (Track) -> Unit,
     onMessage: (String) -> Unit,
     onSortChange: (LibrarySort) -> Unit,
+    /** Pista a resaltar y a la que hay que desplazar la lista (viene del reproductor). */
+    focusUri: Uri? = null,
     modifier: Modifier = Modifier,
 ) {
     val activeCategory = library.activeCategory
@@ -594,6 +596,7 @@ internal fun PowerampLibraryWorkspace(
                                 modifier = Modifier.weight(1f),
                                 bottomPadding = bottomPadding,
                                 indexSort = library.sortMode,
+                                focusUri = focusUri,
                             )
                         }
 
