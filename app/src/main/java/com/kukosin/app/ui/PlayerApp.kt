@@ -2501,6 +2501,7 @@ private fun NowPlayingSheet(
                         LyricsPanel(
                             lyrics = currentLyrics,
                             positionMs = position,
+                            isPlaying = isPlaying,
                             onLineClick = if (controller != null) { timeMs -> controller.seekTo(timeMs) } else null,
                             modifier = Modifier
                                 .weight(1f)
