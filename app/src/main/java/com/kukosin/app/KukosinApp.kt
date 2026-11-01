@@ -7,6 +7,8 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.kukosin.app.data.LibraryInsights
 import com.kukosin.app.data.artwork.EmbeddedArtwork
+import com.kukosin.app.playback.AudioRoute
+import com.kukosin.app.ui.UiSettingsManager
 import com.kukosin.app.ui.theme.AccentTheme
 
 /**
@@ -23,6 +25,10 @@ class KukosinApp : Application(), ImageLoaderFactory {
         // Color de acento guardado por el usuario, antes de que se dibuje cualquier pantalla.
         AccentTheme.init(this)
         LibraryInsights.init(this)
+        UiSettingsManager.init(this)
+        // Detecta la salida (y si hay DAC) antes de que exista un stream, para que
+        // Ajustes pueda bloquear los modos exclusivos desde el primer frame.
+        AudioRoute.init(this)
         com.kukosin.app.eq.EqManager.init(this)
     }
 

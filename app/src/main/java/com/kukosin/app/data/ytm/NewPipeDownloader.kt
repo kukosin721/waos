@@ -58,7 +58,7 @@ internal class NewPipeDownloader : Downloader() {
                 val location = connection.getHeaderField("Location")
                 connection.disconnect()
                 if (location.isNullOrBlank() || redirectCount++ >= MAX_REDIRECTS) {
-                    throw IOException("Redirección no válida desde YouTube")
+                    throw IOException("Invalid redirect from YouTube")
                 }
                 url = URL(URL(url), location).toString()
                 continue
@@ -78,7 +78,7 @@ internal class NewPipeDownloader : Downloader() {
 
             // 429 es la señal que NewPipeExtractor interpreta como captcha / rate limit.
             if (responseCode == 429) {
-                throw ReCaptchaException("YouTube limitó las peticiones (HTTP 429)", latestUrl)
+                throw ReCaptchaException("YouTube rate-limited requests (HTTP 429)", latestUrl)
             }
 
             return Response(responseCode, responseMessage, responseHeaders, responseBody, latestUrl)

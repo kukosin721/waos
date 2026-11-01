@@ -5,6 +5,7 @@ import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -89,7 +90,7 @@ private const val VERSE_MS = 900
 private const val SCROLL_MS = 950
 
 /** Fracción del alto visible donde se ancla el verso activo (0.5 = centro exacto). */
-private const val ANCHOR_FRACTION = 0.46f
+private const val ANCHOR_FRACTION = 0.42f
 
 /**
  * Reloj suave para las letras.
@@ -177,7 +178,7 @@ fun LyricsPanel(
             verticalArrangement = Arrangement.spacedBy(18.dp),
             horizontalAlignment = Alignment.Start,
         ) {
-            item { LyricsSourceChip("${lyrics.source} · texto") }
+            item { LyricsSourceChip("${lyrics.source} · text") }
             item {
                 Text(
                     text = lyrics.plainText,
@@ -233,6 +234,9 @@ private fun SyncedLyrics(
     val listState = rememberLazyListState()
     val userScrolling = rememberUserScrolling(listState)
     var followEnabled by remember { mutableStateOf(true) }
+    // El primer salto no se anima: al abrir las letras el verso actual aparece ya
+    // centrado, sin un barrido desde la primera línea.
+    var initialAligned by remember(synced) { mutableStateOf(false) }
 
     ObserveUserScroll(listState, onScrollActivity)
 
@@ -248,14 +252,20 @@ private fun SyncedLyrics(
 
     LaunchedEffect(active, followEnabled) {
         if (!followEnabled) return@LaunchedEffect
+        val firstAlignment = !initialAligned
         // Un respiro mínimo evita que el scroll salga antes de que el verso
         // anterior termine de encogerse; el resultado se siente continuo.
-        delay(60)
+        if (!firstAlignment) delay(60)
         listState.animateCenteredOn(
             index = active,
             anchorFraction = ANCHOR_FRACTION,
-            spec = tween(durationMillis = SCROLL_MS, easing = LyricsEasing),
+            spec = if (firstAlignment) {
+                snap()
+            } else {
+                tween(durationMillis = SCROLL_MS, easing = LyricsEasing)
+            },
         )
+        initialAligned = true
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -292,7 +302,7 @@ private fun SyncedLyrics(
         }
 
         LyricsSourceChip(
-            if (synced.any { it.isKaraoke }) "${lyrics.source} · karaoke" else "${lyrics.source} · sincronizada",
+            if (synced.any { it.isKaraoke }) "${lyrics.source} · karaoke" else "${lyrics.source} · synced",
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(start = 12.dp, top = 2.dp),
@@ -317,7 +327,7 @@ private fun EmptyLyricsPlaceholder(modifier: Modifier) {
             }
             Spacer(Modifier.height(16.dp))
             Text(
-                "Sin letras embebidas",
+                "No embedded lyrics",
                 color = Cream,
                 fontWeight = FontWeight.SemiBold,
                 style = MaterialTheme.typography.titleLarge,
@@ -325,7 +335,7 @@ private fun EmptyLyricsPlaceholder(modifier: Modifier) {
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "Este archivo no trae USLT/SYLT, Vorbis LYRICS ni ©lyr.",
+                "This file has no USLT/SYLT, Vorbis LYRICS or ©lyr.",
                 color = CreamMuted,
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,

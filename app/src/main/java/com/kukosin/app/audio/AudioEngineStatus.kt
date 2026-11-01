@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 data class AudioStatus(
     val info: EngineInfo = EngineInfo(),
     val deviceName: String = "—",
-    val mode: OutputMode = OutputMode.AAUDIO_EXCLUSIVE,
+    val mode: OutputMode = OutputMode.DISABLED,
     /** Un altavoz interno nunca puede ser bit-perfect: tiene su propio DSP y amplificador. */
     val builtinSpeaker: Boolean = false,
     val message: String? = null,
@@ -53,7 +53,7 @@ object AudioEngineStatus {
     private var deviceName: String = "—"
 
     @Volatile
-    private var mode: OutputMode = OutputMode.AAUDIO_EXCLUSIVE
+    private var mode: OutputMode = OutputMode.DISABLED
 
     @Volatile
     private var builtinSpeaker: Boolean = false
@@ -76,12 +76,12 @@ object AudioEngineStatus {
         builtinSpeaker = false
         lastError = null
         // El modo elegido sobrevive al cierre del stream: sirve para explicar por qué
-        // no hay bit-perfect cuando el modo es "Desactivado".
+        // no hay bit-perfect cuando el modo es "Disabled".
         _status.value = AudioStatus(mode = mode)
     }
 
     /**
-     * Publica el modo elegido aunque no haya motor abierto (caso "Desactivado", donde
+     * Publica el modo elegido aunque no haya motor abierto (caso "Disabled", donde
      * el sink nunca instala el provider de Oboe y por lo tanto nunca llama a [attach]).
      */
     fun setMode(newMode: OutputMode) {

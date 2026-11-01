@@ -56,10 +56,10 @@ data class Track(
         get() = uri.scheme == "content" || uri.scheme == "file"
 
     val effectiveArtist: String
-        get() = artist.ifBlank { albumArtist.ifBlank { "Artista desconocido" } }
+        get() = artist.ifBlank { albumArtist.ifBlank { "Unknown artist" } }
 
     val effectiveAlbumArtist: String
-        get() = albumArtist.ifBlank { artist.ifBlank { "Artista desconocido" } }
+        get() = albumArtist.ifBlank { artist.ifBlank { "Unknown artist" } }
 
     val isHiRes: Boolean
         get() = sampleRate >= 48000 || bitDepth > 16 || codecLabel in listOf("FLAC", "DSD", "ALAC", "WavPack", "APE", "TrueHD")
@@ -79,7 +79,7 @@ data class Track(
 
     val fileSizeLabel: String
         get() {
-            if (fileSize <= 0) return "Desconocido"
+            if (fileSize <= 0) return "Unknown"
             val kb = fileSize / 1024.0
             val mb = kb / 1024.0
             val gb = mb / 1024.0

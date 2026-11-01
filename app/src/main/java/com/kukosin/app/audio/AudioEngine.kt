@@ -55,17 +55,17 @@ enum class EngineState(val code: Int) {
 /** Espejo de oboe::Result. */
 enum class NativeResult(val code: Int, val description: String) {
     OK(0, "OK"),
-    ERROR_DISCONNECTED(-899, "Dispositivo desconectado"),
-    ERROR_ILLEGAL_ARGUMENT(-898, "Argumento inválido"),
-    ERROR_INVALID_STATE(-895, "Estado inválido"),
-    ERROR_UNAVAILABLE(-892, "Formato/rate no disponible en el dispositivo"),
-    ERROR_NO_MEMORY(-890, "Sin memoria"),
-    ERROR_INVALID_FORMAT(-886, "Formato no soportado"),
-    ERROR_OUT_OF_RANGE(-885, "Fuera de rango"),
-    ERROR_INVALID_RATE(-883, "Frecuencia de muestreo no soportada"),
-    ERROR_CLOSED(-882, "Stream cerrado"),
-    ERROR_NULL(-889, "Motor no inicializado"),
-    UNKNOWN(Int.MIN_VALUE, "Error desconocido");
+    ERROR_DISCONNECTED(-899, "Device disconnected"),
+    ERROR_ILLEGAL_ARGUMENT(-898, "Invalid argument"),
+    ERROR_INVALID_STATE(-895, "Invalid state"),
+    ERROR_UNAVAILABLE(-892, "Format/rate not available on the device"),
+    ERROR_NO_MEMORY(-890, "Out of memory"),
+    ERROR_INVALID_FORMAT(-886, "Unsupported format"),
+    ERROR_OUT_OF_RANGE(-885, "Out of range"),
+    ERROR_INVALID_RATE(-883, "Unsupported sample rate"),
+    ERROR_CLOSED(-882, "Stream closed"),
+    ERROR_NULL(-889, "Engine not initialized"),
+    UNKNOWN(Int.MIN_VALUE, "Unknown error");
 
     val isOk: Boolean get() = code == 0
 
@@ -128,11 +128,11 @@ data class EngineInfo(
 
     val converted: Boolean get() = opened && !passthrough
 
-    /** Texto corto para la UI: "24-bit · 96 kHz · exclusivo". */
+    /** Texto corto para la UI: "24-bit · 96 kHz · exclusive". */
     val streamLabel: String
         get() {
             val fmt = stream ?: return "—"
-            val sharing = if (exclusive) "exclusivo" else "compartido"
+            val sharing = if (exclusive) "exclusive" else "shared"
             return "${fmt.bits}-bit · ${(streamSampleRate / 1000.0).format(1)} kHz · $sharing"
         }
 }
@@ -157,7 +157,7 @@ class AudioEngine : AutoCloseable {
     private val infoBuffer = IntArray(INFO_SIZE)
 
     init {
-        require(handle != 0L) { "No se pudo crear el motor de audio nativo" }
+        require(handle != 0L) { "Could not create the native audio engine" }
     }
 
     /**

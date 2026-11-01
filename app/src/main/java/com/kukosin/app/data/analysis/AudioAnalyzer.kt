@@ -60,15 +60,15 @@ object AudioAnalyzer {
         val mediaInfo = runCatching { MediaInfoBuilder().from(context, track.uri).build() }.getOrNull()
         val audio = mediaInfo?.audioStreams?.firstOrNull()
         if (mediaInfo != null) {
-            tags["Contenedor"] = mediaInfo.format.ifBlank { track.mimeType }
-            tags["Duración FFmpeg"] = "${mediaInfo.duration} ms"
-            if (mediaInfo.chapters.isNotEmpty()) tags["Capítulos"] = mediaInfo.chapters.size.toString()
+            tags["Container"] = mediaInfo.format.ifBlank { track.mimeType }
+            tags["FFmpeg duration"] = "${mediaInfo.duration} ms"
+            if (mediaInfo.chapters.isNotEmpty()) tags["Chapters"] = mediaInfo.chapters.size.toString()
         }
         if (audio != null) {
             tags["Codec FFmpeg"] = audio.codecName
             tags["Sample format FFmpeg"] = audio.sampleFormat.orEmpty()
             tags["Sample rate FFmpeg"] = "${audio.sampleRate} Hz"
-            tags["Canales FFmpeg"] = audio.channels.toString()
+            tags["FFmpeg channels"] = audio.channels.toString()
             if (audio.bitRate > 0) tags["Bitrate FFmpeg"] = "${audio.bitRate / 1000} kbps (${audio.bitRate} bps)"
         }
 
@@ -84,16 +84,16 @@ object AudioAnalyzer {
             sampleRate.toLong() * bitDepth * channels
         } else 0L
         if (losslessUncompressed > 0) {
-            tags["Tasa uncompressed (PCM)"] = "${losslessUncompressed / 1000} kbps"
+            tags["Uncompressed rate (PCM)"] = "${losslessUncompressed / 1000} kbps"
             if (bitrate > 0) {
                 val ratio = losslessUncompressed.toDouble() / bitrate
                 val compressionPct = ((1.0 - (1.0 / ratio)) * 100.0).coerceIn(0.0, 99.0)
-                tags["Ratio de compresión"] = "%.2f:1 (%.1f%% comprimido)".format(ratio, compressionPct)
+                tags["Compression ratio"] = "%.2f:1 (%.1f%% compressed)".format(ratio, compressionPct)
             }
         }
-        tags["Tamaño del archivo"] = track.fileSizeLabel
-        tags["Ruta completa"] = track.filePath.ifBlank { track.uri.toString() }
-        tags["Hi-Res Declarado"] = if (sampleRate >= 88200 || bitDepth > 16) "Sí" else "No"
+        tags["File size"] = track.fileSizeLabel
+        tags["Full path"] = track.filePath.ifBlank { track.uri.toString() }
+        tags["Declared Hi-Res"] = if (sampleRate >= 88200 || bitDepth > 16) "Yes" else "No"
 
         return AudioAnalysis(
             uri = track.uri,
@@ -101,8 +101,8 @@ object AudioAnalyzer {
             tags = tags.toList(),
             nyquistHz = if (sampleRate > 0) sampleRate / 2 else 0,
             verdict = AuthenticityVerdict.INCONCLUSIVE,
-            verdictTitle = "Verificación de autenticidad pendiente",
-            verdictDetail = "Presiona 'Verificar Autenticidad y Espectro' para analizar muestras PCM, medir la frecuencia de corte real y validar si es un archivo Hi-Res genuino o un transcode.",
+            verdictTitle = "Authenticity check pending",
+            verdictDetail = "Press 'Verify Authenticity and Spectrum' to analyze PCM samples, measure the real cutoff frequency and validate whether the file is genuine Hi-Res or a transcode.",
             technical = tags.toList(),
         )
     }
@@ -115,18 +115,18 @@ object AudioAnalyzer {
         val mediaInfo = runCatching { MediaInfoBuilder().from(context, track.uri).build() }.getOrNull()
         val audio = mediaInfo?.audioStreams?.firstOrNull()
         if (mediaInfo != null) {
-            tags["Contenedor"] = mediaInfo.format.ifBlank { track.mimeType }
-            tags["Duración FFmpeg"] = "${mediaInfo.duration} ms"
-            if (mediaInfo.chapters.isNotEmpty()) tags["Capítulos"] = mediaInfo.chapters.size.toString()
+            tags["Container"] = mediaInfo.format.ifBlank { track.mimeType }
+            tags["FFmpeg duration"] = "${mediaInfo.duration} ms"
+            if (mediaInfo.chapters.isNotEmpty()) tags["Chapters"] = mediaInfo.chapters.size.toString()
         }
         if (audio != null) {
             tags["Codec FFmpeg"] = audio.codecName
             tags["Sample format FFmpeg"] = audio.sampleFormat.orEmpty()
             tags["Sample rate FFmpeg"] = "${audio.sampleRate} Hz"
-            tags["Canales FFmpeg"] = audio.channels.toString()
+            tags["FFmpeg channels"] = audio.channels.toString()
             if (audio.bitRate > 0) tags["Bitrate FFmpeg"] = "${audio.bitRate / 1000} kbps (${audio.bitRate} bps)"
-            if (!audio.language.isNullOrBlank()) tags["Idioma pista"] = audio.language.orEmpty()
-            if (!audio.title.isNullOrBlank()) tags["Título de stream"] = audio.title.orEmpty()
+            if (!audio.language.isNullOrBlank()) tags["Track language"] = audio.language.orEmpty()
+            if (!audio.title.isNullOrBlank()) tags["Stream title"] = audio.title.orEmpty()
         }
 
         val sampleRate = when {
@@ -141,16 +141,16 @@ object AudioAnalyzer {
             sampleRate.toLong() * bitDepth * channels
         } else 0L
         if (losslessUncompressed > 0) {
-            tags["Tasa uncompressed (PCM)"] = "${losslessUncompressed / 1000} kbps"
+            tags["Uncompressed rate (PCM)"] = "${losslessUncompressed / 1000} kbps"
             if (bitrate > 0) {
                 val ratio = losslessUncompressed.toDouble() / bitrate
                 val compressionPct = ((1.0 - (1.0 / ratio)) * 100.0).coerceIn(0.0, 99.0)
-                tags["Ratio de compresión"] = "%.2f:1 (%.1f%% comprimido)".format(ratio, compressionPct)
+                tags["Compression ratio"] = "%.2f:1 (%.1f%% compressed)".format(ratio, compressionPct)
             }
         }
-        tags["Tamaño del archivo"] = track.fileSizeLabel
-        tags["Ruta completa"] = track.filePath.ifBlank { track.uri.toString() }
-        tags["Hi-Res Declarado"] = if (sampleRate >= 88200 || bitDepth > 16) "Sí" else "No"
+        tags["File size"] = track.fileSizeLabel
+        tags["Full path"] = track.filePath.ifBlank { track.uri.toString() }
+        tags["Declared Hi-Res"] = if (sampleRate >= 88200 || bitDepth > 16) "Yes" else "No"
 
         val capture = runCatching { PcmDecoder.capture(context, track.uri, track.durationMs) }.getOrNull()
         if (capture == null) {
@@ -160,8 +160,8 @@ object AudioAnalyzer {
                 tags = tags.toList(),
                 nyquistHz = if (sampleRate > 0) sampleRate / 2 else 0,
                 verdict = AuthenticityVerdict.INCONCLUSIVE,
-                verdictTitle = "Sin señal PCM capturada",
-                verdictDetail = "Se leyeron metadatos del archivo, pero el decodificador no entregó muestras PCM para el análisis espectral.",
+                verdictTitle = "No PCM signal captured",
+                verdictDetail = "File metadata was read, but the decoder delivered no PCM samples for spectral analysis.",
                 technical = tags.toList(),
             )
         }
@@ -185,31 +185,31 @@ object AudioAnalyzer {
         )
 
         val drRating = when {
-            dr >= 14f -> "Excelente (DR${dr.roundToInt()})"
-            dr >= 10f -> "Bueno (DR${dr.roundToInt()})"
-            dr >= 7f -> "Comprimido (DR${dr.roundToInt()})"
-            else -> "Loudness War / Muy comprimido (DR${dr.roundToInt()})"
+            dr >= 14f -> "Excellent (DR${dr.roundToInt()})"
+            dr >= 10f -> "Good (DR${dr.roundToInt()})"
+            dr >= 7f -> "Compressed (DR${dr.roundToInt()})"
+            else -> "Loudness War / Very compressed (DR${dr.roundToInt()})"
         }
 
         val technical = buildList {
-            add("Veredicto final" to title)
-            add("Diagnóstico técnico" to detail)
-            add("Tasa de muestreo (PCM)" to "$usedRate Hz")
-            add("Frecuencia Nyquist" to "$nyquist Hz")
-            add("Corte espectral medido" to "$cutoff Hz (${"%.1f".format(cutoff / 1000.0)} kHz)")
-            add("Pendiente de caída (Roll-off)" to "%.1f dB/kHz (${if (slope > 20f) "Filtro Brickwall Lossy" else "Caída acústica suave"})".format(slope))
-            add("Uso de ancho de banda" to "${"%.1f".format((cutoff.toFloat() / nyquist.coerceAtLeast(1)) * 100)} % de Nyquist")
-            add("Energía en armónicos >20 kHz" to if (hfRatio > 0.0001f) "%.4f %% (Armónicos ultrasónicos activos)".format(hfRatio * 100) else "Inexistente / Filtrada")
-            add("Volumen True Peak" to "%.1f dBFS".format(peakDb))
-            add("Volumen RMS" to "%.1f dBFS".format(rmsDb))
-            add("Rango Dinámico (DR)" to "%.1f dB — $drRating".format(dr))
-            add("Bits de decodificación PCM" to "${capture.pcmEncodingBits}-bit")
+            add("Final verdict" to title)
+            add("Technical diagnosis" to detail)
+            add("Sample rate (PCM)" to "$usedRate Hz")
+            add("Nyquist frequency" to "$nyquist Hz")
+            add("Measured spectral cutoff" to "$cutoff Hz (${"%.1f".format(cutoff / 1000.0)} kHz)")
+            add("Roll-off slope" to "%.1f dB/kHz (${if (slope > 20f) "Lossy brickwall filter" else "Gentle acoustic roll-off"})".format(slope))
+            add("Bandwidth usage" to "${"%.1f".format((cutoff.toFloat() / nyquist.coerceAtLeast(1)) * 100)} % of Nyquist")
+            add("Energy in harmonics >20 kHz" to if (hfRatio > 0.0001f) "%.4f %% (active ultrasonic harmonics)".format(hfRatio * 100) else "None / filtered")
+            add("True Peak volume" to "%.1f dBFS".format(peakDb))
+            add("RMS volume" to "%.1f dBFS".format(rmsDb))
+            add("Dynamic Range (DR)" to "%.1f dB — $drRating".format(dr))
+            add("PCM decoding bits" to "${capture.pcmEncodingBits}-bit")
             if (padding != null && bitDepth >= 24) {
                 val paddingPct = padding * 100f
-                val paddedText = if (paddingPct > 88f) "FALSO 24-BIT (%.1f%% LSBs en cero)".format(paddingPct) else "24-bit real (%.1f%% LSBs en cero)".format(paddingPct)
-                add("Verificación LSB 24-bit" to paddedText)
+                val paddedText = if (paddingPct > 88f) "FALSE 24-BIT (%.1f%% zero LSBs)".format(paddingPct) else "True 24-bit (%.1f%% zero LSBs)".format(paddingPct)
+                add("24-bit LSB check" to paddedText)
             }
-            add("Muestreo multi-punto" to "${capture.monoWindows.size} ventanas FFT de 4096 muestras")
+            add("Multi-point sampling" to "${capture.monoWindows.size} FFT windows of 4096 samples")
             addAll(tags.toList())
         }
 
@@ -309,18 +309,29 @@ object AudioAnalyzer {
         return if (distanceKhz > 0f) (dropDb / distanceKhz).coerceAtLeast(0f) else 0f
     }
 
+    /**
+     * Reduce el espectro lineal de la FFT a [bars] bandas espaciadas logarítmicamente
+     * entre 20 Hz y Nyquist. Es lo que hace que el gráfico se lea como un espectro
+     * real: los graves ocupan su espacio y el corte del codec se ve nítido.
+     */
     private fun downsample(db: List<Float>, bars: Int, sampleRate: Int): Pair<List<Float>, List<Float>> {
         if (db.isEmpty()) return emptyList<Float>() to emptyList()
         val nyquist = sampleRate / 2f
-        val chunk = db.size / bars.coerceAtLeast(1)
+        val minHz = 20f
+        if (nyquist <= minHz * 2f) return emptyList<Float>() to emptyList()
+        val binHz = sampleRate.toFloat() / 4096f
+        val logLo = log10(minHz)
+        val logHi = log10(nyquist)
         val values = ArrayList<Float>(bars)
         val hz = ArrayList<Float>(bars)
         for (i in 0 until bars) {
-            val start = i * chunk
-            val end = (start + chunk).coerceAtMost(db.size)
-            if (start >= end) break
+            val f0 = 10f.pow(logLo + (logHi - logLo) * i / bars)
+            val f1 = 10f.pow(logLo + (logHi - logLo) * (i + 1) / bars)
+            val start = (f0 / binHz).toInt().coerceIn(0, db.lastIndex)
+            val end = (f1 / binHz).toInt().coerceIn(start + 1, db.size)
             values += db.subList(start, end).max()
-            hz += (start + end) / 2f / db.size * nyquist
+            // Centro geométrico de la banda.
+            hz += kotlin.math.sqrt(f0 * f1)
         }
         return values to hz
     }
@@ -342,38 +353,38 @@ object AudioAnalyzer {
         return when {
             padded -> Triple(
                 AuthenticityVerdict.UPSAMPLED,
-                "Falso 24-bit (Relleno de ceros LSB)",
-                "El ${(padding * 100).roundToInt()}% de los bits menos significativos (LSB) son ceros. Es un archivo de 16-bit empaquetado dentro de un contenedor de $bitDepth-bit.",
+                "Fake 24-bit (LSB zero padding)",
+                "${(padding * 100).roundToInt()}% of the least significant bits (LSB) are zero. It is a 16-bit file packed inside a $bitDepth-bit container.",
             )
             !lossyCodec && cutoffHz < 19_800 && slope > 18f -> Triple(
                 AuthenticityVerdict.LOSSY_TRANSCODE,
-                "Falso Lossless (Transcode MP3/AAC → $codec)",
-                "Declara $codec $bitDepth-bit, pero tiene un corte tajante a ${cutoffHz} Hz (${"%.1f".format(cutoffHz / 1000.0)} kHz) con pendiente brickwall de ${"%.1f".format(slope)} dB/kHz, firma inconfundible de audio comprimido con pérdida re-codificado.",
+                "Fake Lossless (MP3/AAC → $codec transcode)",
+                "Claims $codec $bitDepth-bit, but has a sharp cutoff at ${cutoffHz} Hz (${"%.1f".format(cutoffHz / 1000.0)} kHz) with a brickwall slope of ${"%.1f".format(slope)} dB/kHz, the unmistakable signature of lossy audio re-encoded.",
             )
             sampleRate >= 88_200 && cutoffHz < 24_000 -> Triple(
                 AuthenticityVerdict.UPSAMPLED,
-                "Falso Hi-Res (Upsampled / Resampled)",
-                "Declara muestreo de ${sampleRate / 1000} kHz (Nyquist ${nyquistHz / 1000} kHz), pero la señal cae en ${cutoffHz} Hz (${"%.1f".format(cutoffHz / 1000.0)} kHz). Es material de calidad CD/48k re-muestreado a alta resolución.",
+                "Fake Hi-Res (Upsampled / Resampled)",
+                "Claims a ${sampleRate / 1000} kHz sample rate (Nyquist ${nyquistHz / 1000} kHz), but the signal drops at ${cutoffHz} Hz (${"%.1f".format(cutoffHz / 1000.0)} kHz). This is CD/48k material resampled to high resolution.",
             )
             sampleRate >= 88_200 && (cutoffHz >= 28_000 || hfRatio > 0.0003f) -> Triple(
                 AuthenticityVerdict.AUTHENTIC_HIRES,
-                "Hi-Res 100% Auténtico",
-                "Se confirma espectro analógico continuo con armónicos ultrasónicos activos hasta ${cutoffHz} Hz (${"%.1f".format(cutoffHz / 1000.0)} kHz) y profundidad real de bits.",
+                "100% Authentic Hi-Res",
+                "Continuous analog spectrum confirmed with active ultrasonic harmonics up to ${cutoffHz} Hz (${"%.1f".format(cutoffHz / 1000.0)} kHz) and real bit depth.",
             )
             sampleRate in 44_000..48_100 && cutoffHz >= 19_000 -> Triple(
                 AuthenticityVerdict.AUTHENTIC_CD,
-                "Calidad CD / Lossless Auténtico",
-                "El ancho de banda alcanza ${cutoffHz} Hz, acorde al límite Nyquist de $nyquistHz Hz para audio sin pérdida de 44.1/48 kHz.",
+                "Authentic CD / Lossless Quality",
+                "Bandwidth reaches ${cutoffHz} Hz, matching the $nyquistHz Hz Nyquist limit for 44.1/48 kHz lossless audio.",
             )
             lossyCodec -> Triple(
                 AuthenticityVerdict.AUTHENTIC_LOSSY,
-                "Audio Compreso Auténtico ($codec)",
-                "Corte espectral en ${cutoffHz} Hz con pendiente típica de $codec a ${if (bitrate > 0) "${bitrate / 1000} kbps" else "tasa variable"}.",
+                "Authentic Compressed Audio ($codec)",
+                "Spectral cutoff at ${cutoffHz} Hz with the typical $codec slope at ${if (bitrate > 0) "${bitrate / 1000} kbps" else "variable rate"}.",
             )
             else -> Triple(
                 AuthenticityVerdict.INCONCLUSIVE,
-                "Análisis Espectral Inconcluso",
-                "Corte espectral en ${cutoffHz} Hz frente a Nyquist de $nyquistHz Hz. Puede ser una grabación histórica o master con filtro paso bajo de estudio.",
+                "Inconclusive Spectral Analysis",
+                "Spectral cutoff at ${cutoffHz} Hz versus a Nyquist of $nyquistHz Hz. It may be a historical recording or a studio low-pass master.",
             )
         }
     }

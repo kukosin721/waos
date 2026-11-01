@@ -79,7 +79,7 @@ class EqFilterTest {
 
     @Test
     fun autoHeadroomCompensatesTheRealCurvePeak() {
-        val preset = EqPresets.byName("Bajos")!!
+        val preset = EqPresets.byName("Bass")!!
         val settings = EqSettings(enabled = true, bands = DefaultEqBands).applyingPreset(preset)
         assertEquals(6f, settings.maxBoostDb, 0.001f)
         // El pico de la curva es mayor que el refuerzo de una sola banda: las campanas

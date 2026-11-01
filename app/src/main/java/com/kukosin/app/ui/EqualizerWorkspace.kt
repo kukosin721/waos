@@ -148,7 +148,7 @@ internal fun EqualizerWorkspace(
                     IconButton(onClick = onBackToPlayer) {
                         Icon(
                             Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "Atrás",
+                            contentDescription = "Back",
                             tint = Gold,
                             modifier = Modifier.size(26.dp),
                         )
@@ -156,13 +156,13 @@ internal fun EqualizerWorkspace(
                     Spacer(Modifier.width(6.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "Ecualizador",
+                            "Equalizer",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = Gold,
                         )
                         Text(
-                            "10 bandas · Q constante · 64-bit · ${activeProfile.label}",
+                            "10 bands · constant Q · 64-bit · ${activeProfile.label}",
                             style = MaterialTheme.typography.labelSmall,
                             color = CreamMuted,
                         )
@@ -508,16 +508,16 @@ private fun BandEditor(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "Banda ${index + 1} · ${freqLabel(band.freqHz)}",
+                        "Band ${index + 1} · ${freqLabel(band.freqHz)}",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = Cream,
                     )
                     Text(
                         when (band.type) {
-                            EqBandType.LOW_SHELF -> "Shelf de graves · pendiente suave"
-                            EqBandType.HIGH_SHELF -> "Shelf de agudos · pendiente suave"
-                            EqBandType.PEAK -> "Campana de Q constante"
+                            EqBandType.LOW_SHELF -> "Low shelf · gentle slope"
+                            EqBandType.HIGH_SHELF -> "High shelf · gentle slope"
+                            EqBandType.PEAK -> "Constant-Q bell"
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = CreamMuted,
@@ -536,12 +536,12 @@ private fun BandEditor(
                 value = band.gainDb,
                 min = -EqSettings.MAX_GAIN_DB,
                 max = EqSettings.MAX_GAIN_DB,
-                label = "Ganancia",
+                label = "Gain",
                 onChange = { EqManager.setBandGain(index, it) },
             )
 
             Text(
-                if (showAdvanced) "Ocultar frecuencia y Q" else "Frecuencia y Q de la banda",
+                if (showAdvanced) "Hide frequency and Q" else "Band frequency and Q",
                 style = MaterialTheme.typography.labelSmall,
                 color = Gold,
                 modifier = Modifier
@@ -558,7 +558,7 @@ private fun BandEditor(
                     value = log10(band.freqHz),
                     min = log10(EqSettings.MIN_FREQ_HZ),
                     max = log10(EqSettings.MAX_FREQ_HZ),
-                    label = "Frecuencia ${freqLabel(band.freqHz)}",
+                    label = "Frequency ${freqLabel(band.freqHz)}",
                     onChange = { EqManager.setBandFrequency(index, 10f.pow(it)) },
                 )
                 if (band.type == EqBandType.PEAK) {
@@ -576,8 +576,8 @@ private fun BandEditor(
             if (offending > 0.05f && !settings.autoHeadroom) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Refuerzo máximo +${(Math.round(offending * 10f) / 10f)} dB sin headroom automático: " +
-                        "baja el preamp a -${(Math.round(offending * 10f) / 10f)} dB para evitar clip.",
+                    "Maximum boost +${(Math.round(offending * 10f) / 10f)} dB without auto headroom: " +
+                        "lower the preamp to -${(Math.round(offending * 10f) / 10f)} dB to avoid clipping.",
                     style = MaterialTheme.typography.labelSmall,
                     color = Color(0xFFFFB26B),
                 )
@@ -659,7 +659,7 @@ private fun PresetRow(settings: EqSettings) {
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        "Plano",
+                        "Flat",
                         style = MaterialTheme.typography.labelMedium,
                         color = Cream,
                     )
@@ -676,15 +676,15 @@ private fun PreampCard(settings: EqSettings) {
     Surface(color = InkSoft, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                "Preamp y headroom",
+                "Preamp and headroom",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 color = Cream,
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "El preamp ajusta el nivel antes de la cadena. Con el refuerzo automático, " +
-                    "cada dB que suben las bandas se resta acá: nunca hay clip por ecualizar.",
+                "The preamp sets the level before the chain. With auto headroom, " +
+                    "every dB the bands boost is subtracted here: EQ can never clip.",
                 style = MaterialTheme.typography.bodySmall,
                 color = CreamMuted,
             )
@@ -693,7 +693,7 @@ private fun PreampCard(settings: EqSettings) {
                 value = settings.preampDb,
                 min = -EqSettings.MAX_GAIN_DB,
                 max = EqSettings.MAX_GAIN_DB,
-                label = "Preamp manual ${formatGain(settings.preampDb)}",
+                label = "Manual preamp ${formatGain(settings.preampDb)}",
                 onChange = { EqManager.setPreamp(it) },
             )
             Row(
@@ -702,12 +702,12 @@ private fun PreampCard(settings: EqSettings) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "Headroom automático",
+                        "Automatic headroom",
                         style = MaterialTheme.typography.labelLarge,
                         color = Cream,
                     )
                     Text(
-                        "Atenuación total: ${formatGain(settings.effectivePreampDb)}",
+                        "Total attenuation: ${formatGain(settings.effectivePreampDb)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = CreamMuted,
                     )
@@ -732,25 +732,25 @@ private fun InfoCard(settings: EqSettings) {
     Surface(color = InkSoft, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                "Sobre el procesamiento",
+                "About processing",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 color = Cream,
             )
             Spacer(Modifier.height(6.dp))
-            Bullet("Biquads RBJ en cascada, calculados en 64 bits con 12 dB de rango por banda.")
-            Bullet("Parámetros suavizados a ritmo de audio: mover un slider no produce zipper noise.")
-            Bullet("Con el EQ apagado o plano el procesador no toca la señal: el flujo sigue bit-perfect.")
+            Bullet("Cascaded RBJ biquads, computed in 64-bit with a 12 dB range per band.")
+            Bullet("Parameters smoothed at audio rate: moving a slider produces no zipper noise.")
+            Bullet("With the EQ off or flat the processor does not touch the signal: the stream stays bit-perfect.")
             if (settings.enabled) {
                 Bullet(
-                    "Con el EQ activo el bit-perfect queda en pausa: la señal pasa por la " +
-                        "cadena de filtros (float/24-bit, sin cuantización intermedia).",
+                    "With the EQ active bit-perfect is paused: the signal goes through the " +
+                        "filter chain (float/24-bit, no intermediate quantization).",
                 )
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                "Cada banda es una campana de Q constante (o un shelf en las puntas), " +
-                    "así subir +3 dB no ensancha el filtro.",
+                "Each band is a constant-Q bell (or a shelf at the ends), " +
+                    "so boosting +3 dB does not widen the filter.",
                 style = MaterialTheme.typography.labelSmall,
                 color = CreamMuted,
             )
@@ -810,13 +810,13 @@ private fun gainForY(y: Float, height: Float): Float {
 @Composable
 private fun BandTypeSelector(current: EqBandType, onSelect: (EqBandType) -> Unit) {
     val options = listOf(
-        EqBandType.LOW_SHELF to "Shelf graves",
-        EqBandType.PEAK to "Campana",
-        EqBandType.HIGH_SHELF to "Shelf agudos",
+        EqBandType.LOW_SHELF to "Low shelf",
+        EqBandType.PEAK to "Bell",
+        EqBandType.HIGH_SHELF to "High shelf",
     )
     Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
         Text(
-            "Tipo de filtro",
+            "Filter type",
             style = MaterialTheme.typography.labelSmall,
             color = CreamMuted,
         )

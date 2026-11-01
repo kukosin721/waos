@@ -241,13 +241,13 @@ internal fun AudioSignalPathSheet(
                 Spacer(Modifier.width(10.dp))
                 Column {
                     Text(
-                        "Cadena de Señal Audio (Signal Path)",
+                        "Audio Signal Path",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = Gold,
                     )
                     Text(
-                        "Tráfico de señal punto a punto desde el archivo hasta el DAC / Salida",
+                        "Point-to-point signal traffic from the file to the DAC / output",
                         style = MaterialTheme.typography.bodySmall,
                         color = CreamMuted,
                     )
@@ -255,7 +255,7 @@ internal fun AudioSignalPathSheet(
             }
             if (output.isUsb && !output.hasUsbPermission) {
                 TextButton(onClick = onRequestUsb) {
-                    Text("Conceder permiso USB Host", color = Gold, fontWeight = FontWeight.Bold)
+                    Text("Grant USB Host permission", color = Gold, fontWeight = FontWeight.Bold)
                 }
             }
             Spacer(Modifier.height(16.dp))
@@ -268,10 +268,10 @@ internal fun AudioSignalPathSheet(
             val channelsStr = if (track != null && track.channels > 0) {
                 when (track.channels) {
                     1 -> "Mono (1.0)"
-                    2 -> "Estéreo (2.0)"
-                    else -> "${track.channels} canales"
+                    2 -> "Stereo (2.0)"
+                    else -> "${track.channels} channels"
                 }
-            } else "Estéreo (2.0)"
+            } else "Stereo (2.0)"
 
             val isStream = track != null && !track.isLocal
             val codecStr = track?.codecLabel ?: "FLAC / Audio"
@@ -281,7 +281,7 @@ internal fun AudioSignalPathSheet(
                 else -> "Variable / Lossless"
             }
             val decoderName = when {
-                isStream -> "ExoPlayer · stream progresivo (YouTube Music)"
+                isStream -> "ExoPlayer · progressive stream (YouTube Music)"
                 codecStr in listOf("FLAC", "DSD", "APE", "WavPack", "ALAC", "TrueHD", "DTS", "Opus") ->
                     "NextLib Native FFmpeg Decoder"
                 else -> "ExoPlayer Media3 Native Audio Decoder"
@@ -294,128 +294,128 @@ internal fun AudioSignalPathSheet(
                 item {
                     SignalNodeCard(
                         stepNumber = "1",
-                        title = "Archivo de Origen (Source)",
+                        title = "Source File",
                         subtitle = "${track?.title ?: "Audio Local"} · $codecStr",
                         icon = Icons.Rounded.MusicNote,
                         details = listOf(
-                            "Formato / Codec" to codecStr,
-                            "Frecuencia Muestreo" to sampleRateStr,
-                            "Profundidad Bits" to bitDepthStr,
-                            "Canales" to channelsStr,
-                            "Tasa de Bits" to bitrateStr,
-                            "Ruta Archivo" to (track?.filePath?.ifBlank { track.fileName } ?: "Local Audio"),
+                            "Format / Codec" to codecStr,
+                            "Sample Rate" to sampleRateStr,
+                            "Bit Depth" to bitDepthStr,
+                            "Channels" to channelsStr,
+                            "Bit Rate" to bitrateStr,
+                            "File Path" to (track?.filePath?.ifBlank { track.fileName } ?: "Local Audio"),
                         ),
                     )
                 }
-                item { SignalConnectorArrow("Decodificación en Software") }
+                item { SignalConnectorArrow("Software Decoding") }
                 item {
                     SignalNodeCard(
                         stepNumber = "2",
-                        title = "Decodificador de Audio (Decoder)",
+                        title = "Audio Decoder",
                         subtitle = decoderName,
                         icon = Icons.Rounded.GraphicEq,
                         details = listOf(
-                            "Motor Decodificador" to decoderName,
-                            "Entrada Stream" to "$codecStr ($bitDepthStr / $sampleRateStr)",
-                            "Salida PCM" to if (engineInfo.opened) {
+                            "Decoder Engine" to decoderName,
+                            "Stream Input" to "$codecStr ($bitDepthStr / $sampleRateStr)",
+                            "PCM Output" to if (engineInfo.opened) {
                                 "${engineInfo.source.label} @ ${engineInfo.sourceSampleRate} Hz"
                             } else {
-                                "Según el decodificador (sin motor abierto)"
+                                "Depends on the decoder (no open engine)"
                             },
-                            "Profundidad real" to when {
+                            "Real depth" to when {
                                 !engineInfo.opened -> "—"
                                 track != null && track.bitDepth > engineInfo.source.bits ->
-                                    "${engineInfo.source.bits} bits · el archivo tiene ${track.bitDepth}: " +
-                                        "el decoder está recortando (probá Decodificador = Automático o MediaCodec)"
-                                else -> "${engineInfo.source.bits} bits · sin recorte respecto al archivo"
+                                    "${engineInfo.source.bits} bits · the file has ${track.bitDepth}: " +
+                                        "the decoder is truncating (try Decoder = Automatic or MediaCodec)"
+                                else -> "${engineInfo.source.bits} bits · no truncation versus the file"
                             },
-                            "Estado Motor" to if (engineInfo.passthrough) {
-                                "Sin pérdidas · copia directa al DAC"
+                            "Engine Status" to if (engineInfo.passthrough) {
+                                "Lossless · direct copy to the DAC"
                             } else {
-                                "Con conversión en el motor"
+                                "With conversion in the engine"
                             },
                         ),
                     )
                 }
-                item { SignalConnectorArrow("Procesamiento DSP & Resampler") }
+                item { SignalConnectorArrow("DSP Processing & Resampler") }
                 item {
                     SignalNodeCard(
                         stepNumber = "3",
-                        title = "Re-Muestreo & DSP",
-                        subtitle = if (engineInfo.converted) "Con conversión (el DAC no acepta el rate)" else "Sin conversión",
+                        title = "Resampling & DSP",
+                        subtitle = if (engineInfo.converted) "With conversion (the DAC does not accept the rate)" else "No conversion",
                         icon = Icons.Rounded.Settings,
                         details = listOf(
                             "Resampler" to if (engineInfo.converted) {
-                                "Sí · Kaiser polifásico (el DAC no acepta ${engineInfo.sourceSampleRate} Hz)"
+                                "Yes · polyphase Kaiser (the DAC does not accept ${engineInfo.sourceSampleRate} Hz)"
                             } else {
-                                "Ninguno · el stream va al rate del archivo"
+                                "None · the stream goes at the file's rate"
                             },
-                            "Procesadores DSP" to "Ninguno (la señal no se procesa)",
-                            "Velocidad / Pitch" to "Desactivado (1.0x)",
+                            "Procesadores DSP" to "None (the signal is not processed)",
+                            "Speed / Pitch" to "Disabled (1.0x)",
                         ),
                     )
                 }
-                item { SignalConnectorArrow("Transferencia AudioTrack / System Sink") }
+                item { SignalConnectorArrow("AudioTrack / System Sink Transfer") }
                 item {
                     SignalNodeCard(
                         stepNumber = "4",
-                        title = "Motor Oboe (C++ / JNI)",
+                        title = "Oboe Engine (C++ / JNI)",
                         subtitle = if (engineStatus.mode == OutputMode.DISABLED) {
-                            "No se usa · salida por el mezclador"
+                            "Not used · output through the mixer"
                         } else if (engineInfo.opened) {
                             "${engineInfo.apiLabel} · ${engineInfo.streamLabel}"
                         } else {
-                            "Sin stream abierto"
+                            "No open stream"
                         },
                         icon = Icons.Rounded.Memory,
                         details = listOf(
-                            "API de audio" to engineInfo.apiLabel,
-                            "Formato del stream" to engineInfo.streamLabel,
-                            "Modo de uso" to if (engineInfo.exclusive) "Exclusivo (MMAP)" else "Compartido",
+                            "Audio API" to engineInfo.apiLabel,
+                            "Stream format" to engineInfo.streamLabel,
+                            "Usage mode" to if (engineInfo.exclusive) "Exclusive (MMAP)" else "Shared",
                             "Buffer" to if (engineInfo.opened) {
                                 "${engineInfo.bufferFrames} frames · ${Math.round(engineInfo.bufferMs)} ms"
                             } else "—",
-                            "XRuns" to if (engineInfo.xRuns < 0) "No reportado" else engineInfo.xRuns.toString(),
-                            "Copia de muestras" to if (engineInfo.passthrough) "memcpy (sin conversión)" else "con conversión",
+                            "XRuns" to if (engineInfo.xRuns < 0) "Not reported" else engineInfo.xRuns.toString(),
+                            "Sample copy" to if (engineInfo.passthrough) "memcpy (no conversion)" else "with conversion",
                         ),
                     )
                 }
-                item { SignalConnectorArrow("Dispositivo de Salida Final (Hardware)") }
+                item { SignalConnectorArrow("Final Output Device (Hardware)") }
                 item {
                     SignalNodeCard(
                         stepNumber = "5",
-                        title = "Dispositivo de Salida (Output Hardware)",
+                        title = "Output Device (Hardware)",
                         subtitle = "${output.typeLabel} (${output.name})",
                         icon = if (output.isDac) Icons.Rounded.Usb else Icons.Rounded.Headphones,
                         isHighlight = engineStatus.bitPerfectNow,
                         details = listOf(
-                            "Dispositivo Salida" to engineStatus.deviceName.ifBlank { output.name },
-                            "Tipo Conexión" to output.typeLabel,
-                            "Frecuencias DAC" to output.sampleRatesLabel,
-                            "Modo de salida" to engineStatus.mode.label,
-                            "Volumen" to when {
-                                engineStatus.mode == OutputMode.DISABLED -> "Lo controla el sistema"
+                            "Output Device" to engineStatus.deviceName.ifBlank { output.name },
+                            "Connection Type" to output.typeLabel,
+                            "DAC Rates" to output.sampleRatesLabel,
+                            "Output mode" to engineStatus.mode.label,
+                            "Volume" to when {
+                                engineStatus.mode == OutputMode.DISABLED -> "Controlled by the system"
                                 engineStatus.mode.locksVolume -> engineStatus.mode.volumeHint
                                 engineStatus.mode.usesHardwareVolume -> engineStatus.mode.volumeHint
                                 else -> "${engineStatus.mode.volumeHint} · ${engineInfo.volumePercent} %"
                             },
-                            "Estado Bit-Perfect" to if (engineStatus.bitPerfectNow) {
-                                "ACTIVO · transferencia bit a bit"
+                            "Bit-Perfect Status" to if (engineStatus.bitPerfectNow) {
+                                "ACTIVE · bit-for-bit transfer"
                             } else {
                                 when {
                                     engineStatus.mode == OutputMode.DISABLED ->
-                                        "No · modo Desactivado (mezclador Android)"
+                                        "No · Disabled mode (Android mixer)"
                                     engineStatus.builtinSpeaker ->
-                                        "No · el altavoz interno no puede ser bit-perfect"
-                                    engineStatus.eqActive -> "No · ecualizador activo (DSP de 64 bits)"
-                                    !engineInfo.opened -> "Sin stream"
-                                    !engineInfo.exclusive -> "Compartido con el mezclador"
-                                    engineInfo.converted -> "Convertido al formato del DAC"
-                                    engineInfo.volumePercent < 100 -> "Atenuado digitalmente (${engineInfo.volumePercent} %)"
-                                    else -> "Inactivo"
+                                        "No · the built-in speaker cannot be bit-perfect"
+                                    engineStatus.eqActive -> "No · equalizer active (64-bit DSP)"
+                                    !engineInfo.opened -> "No stream"
+                                    !engineInfo.exclusive -> "Shared with the mixer"
+                                    engineInfo.converted -> "Converted to the DAC format"
+                                    engineInfo.volumePercent < 100 -> "Digitally attenuated (${engineInfo.volumePercent} %)"
+                                    else -> "Inactive"
                                 }
                             },
-                            "Permiso USB Host" to if (output.hasUsbPermission) "Concedido (Acceso Directo Hardware)" else "No Requerido / Estándar",
+                            "USB Host Permission" to if (output.hasUsbPermission) "Granted (Direct Hardware Access)" else "Not Required / Standard",
                         ),
                     )
                 }
@@ -554,7 +554,7 @@ internal fun AlbumDetailSheet(
                     Text(album.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Cream)
                     Text(album.artist, style = MaterialTheme.typography.bodyLarge, color = CreamMuted)
                     Text(
-                        "${album.tracks.size} canciones${if (album.year > 0) " · ${album.year}" else ""}",
+                        "${album.tracks.size} songs${if (album.year > 0) " · ${album.year}" else ""}",
                         style = MaterialTheme.typography.labelMedium,
                         color = Gold,
                     )
@@ -568,7 +568,7 @@ internal fun AlbumDetailSheet(
                 Button(
                     onClick = {
                         playTrackList(controller, album.tracks, 0)
-                        onMessage?.invoke("Reproduciendo álbum: ${album.name}")
+                        onMessage?.invoke("Playing album: ${album.name}")
                     },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
@@ -576,7 +576,7 @@ internal fun AlbumDetailSheet(
                 ) {
                     Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Reproducir", fontWeight = FontWeight.Bold)
+                    Text("Play", fontWeight = FontWeight.Bold)
                 }
 
                 Surface(
@@ -594,7 +594,7 @@ internal fun AlbumDetailSheet(
                     ) {
                         Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = null, tint = Gold, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("+ Cola", style = MaterialTheme.typography.labelMedium, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("+ Queue", style = MaterialTheme.typography.labelMedium, color = Gold, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -658,7 +658,7 @@ internal fun ArtistDetailSheet(
                 Spacer(Modifier.width(16.dp))
                 Column(Modifier.weight(1f)) {
                     Text(artist.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Cream)
-                    Text("${artist.albumCount} álbumes · ${artist.trackCount} canciones", style = MaterialTheme.typography.bodyMedium, color = CreamMuted)
+                    Text("${artist.albumCount} albums · ${artist.trackCount} songs", style = MaterialTheme.typography.bodyMedium, color = CreamMuted)
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -669,7 +669,7 @@ internal fun ArtistDetailSheet(
                 Button(
                     onClick = {
                         playTrackList(controller, artist.tracks, 0)
-                        onMessage?.invoke("Reproduciendo artista: ${artist.name}")
+                        onMessage?.invoke("Playing artist: ${artist.name}")
                     },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
@@ -677,7 +677,7 @@ internal fun ArtistDetailSheet(
                 ) {
                     Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Reproducir", fontWeight = FontWeight.Bold)
+                    Text("Play", fontWeight = FontWeight.Bold)
                 }
 
                 Surface(
@@ -695,7 +695,7 @@ internal fun ArtistDetailSheet(
                     ) {
                         Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = null, tint = Gold, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("+ Cola", style = MaterialTheme.typography.labelMedium, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("+ Queue", style = MaterialTheme.typography.labelMedium, color = Gold, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -757,14 +757,14 @@ internal fun MetadataInspectorDialog(
                         Icon(Icons.Rounded.Info, contentDescription = null, tint = Gold, modifier = Modifier.size(24.dp))
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            "Info y Autenticidad",
+                            "Info and Authenticity",
                             style = MaterialTheme.typography.titleLarge,
                             color = Gold,
                             fontWeight = FontWeight.Bold,
                         )
                     }
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Cerrar", tint = CreamMuted)
+                        Icon(Icons.Rounded.Close, contentDescription = "Close", tint = CreamMuted)
                     }
                 }
 
@@ -786,41 +786,41 @@ internal fun MetadataInspectorDialog(
                     }
                     item {
                         Spacer(Modifier.height(4.dp))
-                        MetaGroupHeader("Etiquetas del Archivo")
-                        MetaItem("Título", track.title)
-                        MetaItem("Artista", track.effectiveArtist)
-                        MetaItem("Álbum", track.album)
-                        if (track.albumArtist.isNotBlank()) MetaItem("Artista del Álbum", track.albumArtist)
-                        if (track.genre.isNotBlank()) MetaItem("Género", track.genre)
-                        if (track.composer.isNotBlank()) MetaItem("Compositor", track.composer)
-                        if (track.trackNumber > 0) MetaItem("Número de Pista", track.trackNumber.toString())
-                        if (track.discNumber > 0) MetaItem("Número de Disco", track.discNumber.toString())
-                        if (track.year > 0) MetaItem("Año / Fecha", track.year.toString())
-                        if (track.comment.isNotBlank()) MetaItem("Comentario", track.comment)
+                        MetaGroupHeader("File Tags")
+                        MetaItem("Title", track.title)
+                        MetaItem("Artist", track.effectiveArtist)
+                        MetaItem("Album", track.album)
+                        if (track.albumArtist.isNotBlank()) MetaItem("Album Artist", track.albumArtist)
+                        if (track.genre.isNotBlank()) MetaItem("Genre", track.genre)
+                        if (track.composer.isNotBlank()) MetaItem("Composer", track.composer)
+                        if (track.trackNumber > 0) MetaItem("Track Number", track.trackNumber.toString())
+                        if (track.discNumber > 0) MetaItem("Disc Number", track.discNumber.toString())
+                        if (track.year > 0) MetaItem("Year / Date", track.year.toString())
+                        if (track.comment.isNotBlank()) MetaItem("Comment", track.comment)
                     }
                     item {
                         Spacer(Modifier.height(4.dp))
-                        MetaGroupHeader("Especificaciones de Audio")
-                        MetaItem("Codec / Formato", track.codecLabel)
-                        MetaItem("Tipo Mime", track.mimeType)
-                        MetaItem("Frecuencia de Muestreo", if (track.sampleRate > 0) "${track.sampleRate} Hz" else "N/A")
-                        MetaItem("Profundidad de Bits", if (track.bitDepth > 0) "${track.bitDepth}-bit" else "N/A")
-                        MetaItem("Canales", if (track.channels > 0) "${track.channels}" else "Estéreo")
-                        MetaItem("Tasa de Bits", if (track.bitrate > 0) "${track.bitrate / 1000} kbps" else "Variable / Lossless")
-                        MetaItem("Duración", formatTime(track.durationMs))
+                        MetaGroupHeader("Audio Specifications")
+                        MetaItem("Codec / Format", track.codecLabel)
+                        MetaItem("MIME type", track.mimeType)
+                        MetaItem("Sample Rate", if (track.sampleRate > 0) "${track.sampleRate} Hz" else "N/A")
+                        MetaItem("Bit Depth", if (track.bitDepth > 0) "${track.bitDepth}-bit" else "N/A")
+                        MetaItem("Channels", if (track.channels > 0) "${track.channels}" else "Stereo")
+                        MetaItem("Bit Rate", if (track.bitrate > 0) "${track.bitrate / 1000} kbps" else "Variable / Lossless")
+                        MetaItem("Duration", formatTime(track.durationMs))
                     }
                     item {
                         Spacer(Modifier.height(4.dp))
-                        MetaGroupHeader("Archivo e Integración Bit-Perfect")
-                        MetaItem("Ruta de Archivo", track.filePath.ifBlank { track.uri.toString() })
-                        MetaItem("Tamaño de Archivo", track.fileSizeLabel)
-                        MetaItem("Salida Activa", "${output.typeLabel} (${output.name})", onClick = onOpenSignalPath)
+                        MetaGroupHeader("File and Bit-Perfect Integration")
+                        MetaItem("File Path", track.filePath.ifBlank { track.uri.toString() })
+                        MetaItem("File Size", track.fileSizeLabel)
+                        MetaItem("Active Output", "${output.typeLabel} (${output.name})", onClick = onOpenSignalPath)
                         MetaItem(
-                            "Estado Bit-Perfect",
-                            if (AudioEngineStatus.status.value.bitPerfectNow) "Activo · bit a bit" else "No activo",
+                            "Bit-Perfect Status",
+                            if (AudioEngineStatus.status.value.bitPerfectNow) "Active · bit for bit" else "Not active",
                             onClick = onOpenSignalPath,
                         )
-                        MetaItem("Frecuencias Soportadas DAC", output.sampleRatesLabel, onClick = onOpenSignalPath)
+                        MetaItem("DAC Supported Rates", output.sampleRatesLabel, onClick = onOpenSignalPath)
                     }
                     item {
                         Spacer(Modifier.height(12.dp))

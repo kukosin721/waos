@@ -10,16 +10,16 @@ import com.kukosin.app.data.Track
  * pantalla, suena esa y no otra.
  *
  * Nota honesta: esta rama no guarda la fecha en la que se agregó cada archivo al
- * teléfono (no hay `DATE_ADDED` en el escaneo), así que el criterio "más nuevas" se
- * apoya en el año del tag y el número de pista. Por eso se llama "Año", no
- * "Recientes": es lo que realmente hay.
+ * teléfono (no hay `DATE_ADDED` en el escaneo), así que el criterio "newest" se
+ * apoya en el año del tag y el número de pista. Por eso se llama "Year", no
+ * "Recent": es lo que realmente hay.
  */
 enum class LibrarySort(val label: String, val shortLabel: String) {
-    TITULO("Título (A–Z)", "Título"),
-    ARTISTA("Artista (A–Z)", "Artista"),
-    ALBUM("Álbum (A–Z)", "Álbum"),
-    DURACION("Duración (menor a mayor)", "Duración"),
-    ANO("Año (más nuevo primero)", "Año"),
+    TITULO("Title (A–Z)", "Title"),
+    ARTISTA("Artist (A–Z)", "Artist"),
+    ALBUM("Album (A–Z)", "Album"),
+    DURACION("Duration (shortest first)", "Duration"),
+    ANO("Year (newest first)", "Year"),
     ;
 
     /** Con un orden alfabético la barra lateral A–Z tiene sentido; con los otros, no. */

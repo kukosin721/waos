@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 data class AudioConfig(
     /** Camino de salida: mezclador, exclusivo integrado, directo o DAC USB. */
-    val outputMode: OutputMode = OutputMode.AAUDIO_EXCLUSIVE,
+    val outputMode: OutputMode = OutputMode.DISABLED,
     /**
      * Si está activo, el motor NUNCA convierte: o abre exacto, o falla y avisa.
      * Apagado (recomendado), intenta bit-perfect primero y sólo si el DAC no lo
@@ -63,7 +63,9 @@ object AudioSettingsManager {
     private fun load() {
         val p = prefs ?: return
         state.value = AudioConfig(
-            outputMode = OutputMode.fromName(p.getString("output_mode", null)),
+            // Clave nueva: las instalaciones que ya existían vuelven al modo seguro
+            // (mezclador) en vez de arrancar con un modo exclusivo sin DAC.
+            outputMode = OutputMode.fromName(p.getString("output_mode_v3", OutputMode.DISABLED.name)),
             strictBitPerfect = p.getBoolean("strict_bit_perfect", false),
             bufferMs = p.getInt("buffer_ms", 250).coerceIn(40, 2000),
             fades = p.getBoolean("fades", true),
@@ -76,7 +78,7 @@ object AudioSettingsManager {
     }
 
     fun setOutputMode(mode: OutputMode) {
-        prefs?.edit()?.putString("output_mode", mode.name)?.apply()
+        prefs?.edit()?.putString("output_mode_v3", mode.name)?.apply()
         state.value = state.value.copy(outputMode = mode)
     }
 

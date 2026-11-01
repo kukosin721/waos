@@ -15,16 +15,16 @@ import kotlin.math.abs
  * el tono. Así el contraste con el fondo oscuro y los textos crema se mantiene igual en todos.
  */
 enum class AccentPreset(val label: String, val hueDegrees: Float) {
-    ORO("Oro", 37f),
-    AMBAR("Ámbar", 25f),
-    COBRE("Cobre", 14f),
-    ROSA("Rosa", 340f),
+    ORO("Gold", 37f),
+    AMBAR("Amber", 25f),
+    COBRE("Copper", 14f),
+    ROSA("Pink", 340f),
     MAGENTA("Magenta", 315f),
-    VIOLETA("Violeta", 270f),
-    AZUL("Azul", 212f),
-    CIAN("Cian", 188f),
-    ESMERALDA("Esmeralda", 155f),
-    LIMA("Lima", 95f),
+    VIOLETA("Violet", 270f),
+    AZUL("Blue", 212f),
+    CIAN("Cyan", 188f),
+    ESMERALDA("Emerald", 155f),
+    LIMA("Lime", 95f),
 }
 
 /**

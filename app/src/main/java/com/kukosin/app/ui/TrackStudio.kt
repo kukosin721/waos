@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -43,6 +44,7 @@ import com.kukosin.app.ui.theme.CreamMuted
 import com.kukosin.app.ui.theme.Gold
 import com.kukosin.app.ui.theme.Ink
 import com.kukosin.app.ui.theme.InkSoft
+import kotlin.math.log10
 import kotlin.math.roundToInt
 
 @Composable
@@ -59,7 +61,7 @@ fun AnalysisPanel(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(color = Gold)
                 Spacer(Modifier.height(12.dp))
-                Text("Decodificando PCM y analizando espectro FFT…", color = CreamMuted)
+                Text("Decoding PCM and analyzing FFT spectrum…", color = CreamMuted)
             }
         }
         return
@@ -94,7 +96,7 @@ fun AnalysisPanel(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            if (hasSpectrum) analysis?.verdictTitle.orEmpty() else "Verificación de Autenticidad Hi-Res",
+                            if (hasSpectrum) analysis?.verdictTitle.orEmpty() else "Hi-Res Authenticity Check",
                             color = if (hasSpectrum) verdictColor else Gold,
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleMedium,
@@ -104,9 +106,9 @@ fun AnalysisPanel(
                 Spacer(Modifier.height(6.dp))
                 Text(
                     when {
-                        !canAnalyze -> "Este audio llega por streaming desde YouTube Music, así que no hay muestras PCM locales para analizar. El análisis espectral y de autenticidad funciona con archivos del dispositivo (FLAC, WAV, MP3, etc.)."
+                        !canAnalyze -> "This audio is streamed from YouTube Music, so there are no local PCM samples to analyze. Spectral and authenticity analysis works with files on the device (FLAC, WAV, MP3, etc.)."
                         hasSpectrum -> analysis?.verdictDetail.orEmpty()
-                        else -> "Analiza las muestras PCM y el espectro de frecuencias FFT para verificar si el archivo es 100% auténtico, si fue upsampleado o si es un transcode de MP3/AAC."
+                        else -> "Analyze the PCM samples and FFT frequency spectrum to verify whether the file is 100% authentic, upsampled, or an MP3/AAC transcode."
                     },
                     color = Cream,
                     style = MaterialTheme.typography.bodyMedium,
@@ -122,7 +124,7 @@ fun AnalysisPanel(
                         Icon(Icons.Rounded.GraphicEq, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            if (hasSpectrum) "Re-analizar Espectro y Autenticidad" else "🔍 Verificar Autenticidad y Espectro",
+                            if (hasSpectrum) "Re-analyze Spectrum and Authenticity" else "🔍 Verify Authenticity and Spectrum",
                             fontWeight = FontWeight.Bold,
                         )
                     }
@@ -137,9 +139,9 @@ fun AnalysisPanel(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Espectro de Frecuencia (FFT 4096)", color = Gold, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                    Text("Frequency Spectrum (FFT 4096)", color = Gold, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                     Text(
-                        "Corte: ${analysis.cutoffHz} Hz",
+                        "Cutoff: ${analysis.cutoffHz} Hz",
                         color = Color(0xFFE07A5F),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
@@ -155,14 +157,14 @@ fun AnalysisPanel(
                     modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text("Pico: ${"%.1f".format(analysis.peakDb)} dBFS", color = CreamMuted, style = MaterialTheme.typography.labelSmall)
+                    Text("Peak: ${"%.1f".format(analysis.peakDb)} dBFS", color = CreamMuted, style = MaterialTheme.typography.labelSmall)
                     Text("RMS: ${"%.1f".format(analysis.rmsDb)} dBFS", color = CreamMuted, style = MaterialTheme.typography.labelSmall)
                     Text("DR: ${"%.1f".format(analysis.dynamicRangeDb)} dB", color = Gold, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                 }
             }
         }
 
-        Text("Parámetros Técnicos y Metadatos Extraídos", color = Gold, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+        Text("Technical Parameters and Extracted Metadata", color = Gold, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
 
         val technicalList = analysis?.technical?.ifEmpty { analysis.tags }.orEmpty()
         technicalList.forEach { (label, value) ->
@@ -198,91 +200,149 @@ fun SpectrumChart(
     nyquistHz: Float,
 ) {
     val textMeasurer = rememberTextMeasurer()
-    val labelStyle = TextStyle(color = CreamMuted.copy(alpha = 0.75f), fontSize = 9.sp)
+    val labelStyle = TextStyle(color = CreamMuted.copy(alpha = 0.80f), fontSize = 9.sp)
+    val axisStyle = TextStyle(color = CreamMuted.copy(alpha = 0.55f), fontSize = 8.sp)
 
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
-            .height(210.dp)
+            .height(230.dp)
             .background(Ink, RoundedCornerShape(12.dp))
-            .padding(6.dp),
+            .padding(start = 6.dp, end = 6.dp, top = 8.dp, bottom = 6.dp),
     ) {
         if (magnitudes.isEmpty()) return@Canvas
-        val minDb = -90f
-        val maxDb = magnitudes.max().coerceAtLeast(-10f)
-        val barWidth = size.width / magnitudes.size
+
+        // Escala vertical real: -100 dBFS (silencio digital) a 0 dBFS.
+        val minDb = -100f
+        val maxDb = 0f
+        // Eje logarítmico: así se ve un espectro de verdad, no una mancha a la
+        // izquierda. De 20 Hz al Nyquist del archivo.
+        val minHz = 20f
+        val topHz = nyquistHz.coerceAtLeast(minHz * 4f)
+        val logLo = log10(minHz)
+        val logHi = log10(topHz)
+
+        fun xForHz(hz: Float): Float {
+            val clamped = hz.coerceIn(minHz, topHz)
+            val t = (log10(clamped) - logLo) / (logHi - logLo)
+            return (t * size.width).coerceIn(0f, size.width)
+        }
 
         fun yForDb(db: Float): Float =
-            ((db - minDb) / (maxDb - minDb)).coerceIn(0f, 1f) * size.height
+            ((db.coerceIn(minDb, maxDb) - minDb) / (maxDb - minDb)) * size.height
 
-        // Rejilla horizontal cada 20 dB.
+        // Región sin contenido por encima del corte: la firma visual del lossy.
+        if (cutoffHz > 0f && cutoffHz < topHz) {
+            val xCut = xForHz(cutoffHz)
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        Color(0xFFE07A5F).copy(alpha = 0.16f),
+                        Color(0xFFE07A5F).copy(alpha = 0.03f),
+                    ),
+                    startX = xCut,
+                    endX = size.width,
+                ),
+                topLeft = Offset(xCut, 0f),
+                size = Size((size.width - xCut).coerceAtLeast(0f), size.height),
+            )
+        }
+
+        // Rejilla horizontal cada 20 dB con etiqueta.
         var gridDb = -20f
         while (gridDb > minDb) {
             val y = size.height - yForDb(gridDb)
             drawLine(
-                color = CreamMuted.copy(alpha = 0.08f),
+                color = CreamMuted.copy(alpha = 0.09f),
                 start = Offset(0f, y),
                 end = Offset(size.width, y),
                 strokeWidth = 1f,
             )
+            val text = textMeasurer.measure("${gridDb.toInt()}", axisStyle)
+            drawText(text, topLeft = Offset(1f, (y - text.size.height).coerceAtLeast(0f)))
             gridDb -= 20f
         }
 
-        // Barras: redondeadas y con la opacidad según la intensidad, así los picos se
-        // leen de un vistazo en vez de verse todas iguales.
-        magnitudes.forEachIndexed { index, db ->
-            val h = yForDb(db) * size.height
-            if (h <= 0.5f) return@forEachIndexed
-            val below = frequencies.getOrNull(index)?.let { it <= cutoffHz } == true
-            val intensity = ((db - minDb) / (maxDb - minDb)).coerceIn(0f, 1f)
-            val color = if (below) {
-                Gold.copy(alpha = 0.35f + 0.6f * intensity)
-            } else {
-                CreamMuted.copy(alpha = 0.18f + 0.30f * intensity)
-            }
-            drawRoundRect(
-                color = color,
-                topLeft = Offset(index * barWidth, size.height - h),
-                size = Size(
-                    (barWidth * 0.72f).coerceAtLeast(1f),
-                    h.coerceAtLeast(1f),
-                ),
-                cornerRadius = CornerRadius(
-                    (barWidth * 0.36f).coerceAtLeast(0.5f),
-                    (barWidth * 0.36f).coerceAtLeast(0.5f),
+        // Rejilla vertical en las frecuencias que importan.
+        val decades = listOf(20f, 50f, 100f, 200f, 500f, 1_000f, 2_000f, 5_000f, 10_000f, 20_000f)
+        decades.filter { it <= topHz }.forEach { hz ->
+            val x = xForHz(hz)
+            drawLine(
+                color = CreamMuted.copy(alpha = 0.07f),
+                start = Offset(x, 0f),
+                end = Offset(x, size.height),
+                strokeWidth = 1f,
+            )
+            val label = if (hz >= 1000f) "${(hz / 1000f).roundToInt()}k" else "${hz.roundToInt()}"
+            val text = textMeasurer.measure(label, axisStyle)
+            drawText(
+                text,
+                topLeft = Offset(
+                    (x + 2f).coerceAtMost(size.width - text.size.width),
+                    size.height - text.size.height,
                 ),
             )
         }
 
-        fun xForHz(hz: Float): Float {
-            if (nyquistHz <= 0f) return 0f
-            return (hz / nyquistHz).coerceIn(0f, 1f) * size.width
+        // Barras: cada una ocupa el hueco logarítmico hasta la siguiente frecuencia.
+        val count = magnitudes.size
+        for (i in 0 until count) {
+            val hz = frequencies.getOrNull(i) ?: continue
+            val nextHz = frequencies.getOrNull(i + 1) ?: topHz
+            val x0 = xForHz(hz)
+            val x1 = if (i + 1 < count) xForHz(nextHz) else size.width
+            val width = (x1 - x0 - 0.6f).coerceAtLeast(0.6f)
+            val db = magnitudes[i]
+            val h = yForDb(db)
+            if (h <= 0.5f) continue
+            val below = cutoffHz <= 0f || hz <= cutoffHz
+            val intensity = ((db - minDb) / (maxDb - minDb)).coerceIn(0f, 1f)
+            val color = if (below) {
+                Gold.copy(alpha = 0.30f + 0.68f * intensity)
+            } else {
+                Color(0xFFE07A5F).copy(alpha = 0.10f + 0.35f * intensity)
+            }
+            drawRect(
+                color = color,
+                topLeft = Offset(x0, size.height - h),
+                size = Size(width, h),
+            )
         }
 
+        // Línea de corte medida.
         if (cutoffHz > 0f) {
             val x = xForHz(cutoffHz)
-            drawLine(Color(0xFFE07A5F), Offset(x, 0f), Offset(x, size.height), strokeWidth = 3f)
-        }
-
-        if (nyquistHz > 20000f) {
-            val x = xForHz(20000f)
-            drawLine(CreamMuted.copy(alpha = 0.5f), Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.5f)
-            val mark = textMeasurer.measure("20 kHz", labelStyle)
-            drawText(mark, topLeft = Offset((x + 3f).coerceAtMost(size.width - mark.size.width), 2f))
-        }
-
-        // Referencias de eje: 0 Hz a la izquierda y Nyquist a la derecha.
-        val zero = textMeasurer.measure("0 Hz", labelStyle)
-        drawText(zero, topLeft = Offset(0f, size.height - zero.size.height - 1f))
-        if (nyquistHz > 0f) {
-            val label = "Nyquist ${(nyquistHz / 1000f).roundToInt()}k"
-            val nyq = textMeasurer.measure(label, labelStyle)
+            var y = 0f
+            while (y < size.height) {
+                drawLine(
+                    color = Color(0xFFE07A5F),
+                    start = Offset(x, y),
+                    end = Offset(x, (y + 6f).coerceAtMost(size.height)),
+                    strokeWidth = 2.4f,
+                )
+                y += 11f
+            }
+            val cutLabel = textMeasurer.measure(
+                "cut ${"%.1f".format(cutoffHz / 1000f)}k",
+                labelStyle,
+            )
             drawText(
-                nyq,
+                cutLabel,
                 topLeft = Offset(
-                    (size.width - nyq.size.width).coerceAtLeast(0f),
-                    size.height - nyq.size.height - 1f,
+                    (x + 3f).coerceAtMost(size.width - cutLabel.size.width),
+                    1f,
                 ),
+            )
+        }
+
+        // Referencia de 20 kHz cuando el archivo llega más arriba.
+        if (topHz > 21_000f) {
+            val x = xForHz(20_000f)
+            drawLine(
+                color = Cream.copy(alpha = 0.30f),
+                start = Offset(x, 0f),
+                end = Offset(x, size.height),
+                strokeWidth = 1.2f,
             )
         }
     }

@@ -37,7 +37,7 @@ class AudioConfigTest {
     @Test
     fun defaultsAreSane() {
         val config = AudioConfig()
-        assertEquals(OutputMode.AAUDIO_EXCLUSIVE, config.outputMode)
+        assertEquals(OutputMode.DISABLED, config.outputMode)
         assertEquals(false, config.strictBitPerfect)
         assertEquals(250, config.bufferMs)
         assertEquals(true, config.fades)

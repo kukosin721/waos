@@ -29,18 +29,18 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 enum class LibraryCategory(val title: String) {
-    TODAS_LAS_CANCIONES("Todas las canciones"),
-    CARPETAS("Carpetas"),
-    ALBUMES("Álbumes"),
-    ARTISTAS("Artistas"),
-    ARTISTAS_DEL_ALBUM("Artistas del álbum"),
-    GENEROS("Géneros"),
-    ANOS("Años"),
-    COMPOSITORES("Compositores"),
-    LISTAS_DE_REPRODUCCION("Listas de reproducción"),
-    LA_COLA("La cola"),
-    FAVORITOS("Favoritos"),
-    MAS_REPRODUCIDO("Más reproducido"),
+    TODAS_LAS_CANCIONES("All songs"),
+    CARPETAS("Folders"),
+    ALBUMES("Albums"),
+    ARTISTAS("Artists"),
+    ARTISTAS_DEL_ALBUM("Album artists"),
+    GENEROS("Genres"),
+    ANOS("Years"),
+    COMPOSITORES("Composers"),
+    LISTAS_DE_REPRODUCCION("Playlists"),
+    LA_COLA("The queue"),
+    FAVORITOS("Favorites"),
+    MAS_REPRODUCIDO("Most played"),
 }
 
 data class LibraryUiState(
@@ -279,7 +279,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         AudioSettingsManager.init(getApplication())
     }
 
-    /** "Volver a escanear": tira la caché de sondeo (memoria + disco) y reconstruye. */
+    /** "Rescan": tira la caché de sondeo (memoria + disco) y reconstruye. */
     fun rescan() {
         MusicLibrary.invalidateProbeCache(getApplication())
         refresh()
@@ -337,8 +337,8 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 .getOrElse { error ->
                     AudioAnalysis(
                         uri = track.uri,
-                        error = error.message ?: "No se pudo analizar",
-                        verdictTitle = "Error de análisis",
+                        error = error.message ?: "Could not analyze",
+                        verdictTitle = "Analysis error",
                         verdictDetail = error.message.orEmpty(),
                     )
                 }
@@ -369,7 +369,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 val results = YtmService.search(needle)
                 ytmTracks.value = results
                 if (results.isEmpty()) {
-                    ytmError.value = "Sin resultados para \"$needle\""
+                    ytmError.value = "No results for \"$needle\""
                 }
             } catch (throwable: Throwable) {
                 ytmTracks.value = emptyList()
@@ -393,7 +393,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
                 val enriched = MusicLibrary.enrich(getApplication(), scanned)
                 updateState(enriched)
             } catch (throwable: Throwable) {
-                error.value = throwable.message ?: "No se pudo escanear la biblioteca"
+                error.value = throwable.message ?: "Could not scan the library"
                 hasScanned.value = true
                 isScanning.value = false
             }

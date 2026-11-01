@@ -151,28 +151,28 @@ internal fun PlayerShortcutBar(
     ) {
         ShortcutPillButton(
             icon = Icons.Rounded.LibraryMusic,
-            label = "Biblioteca",
+            label = "Library",
             enabled = enabled,
             onClick = onOpenLibrary,
             modifier = Modifier.weight(1f),
         )
         ShortcutPillButton(
             icon = Icons.Rounded.Tune,
-            label = "Ecualizador",
+            label = "Equalizer",
             enabled = enabled,
             onClick = onOpenEqualizer,
             modifier = Modifier.weight(1f),
         )
         ShortcutPillButton(
             icon = Icons.Rounded.Search,
-            label = "Búsqueda",
+            label = "Search",
             enabled = enabled,
             onClick = onOpenSearch,
             modifier = Modifier.weight(1f),
         )
         ShortcutPillButton(
             icon = Icons.Rounded.Settings,
-            label = "Configuración",
+            label = "Settings",
             enabled = enabled,
             onClick = onOpenSettings,
             modifier = Modifier.weight(1f),
@@ -311,14 +311,14 @@ internal fun PowerampLibraryWorkspace(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "Volver",
+                    contentDescription = "Back",
                     tint = Gold,
                     modifier = Modifier.size(26.dp),
                 )
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = activeCategory?.title ?: "Biblioteca",
+                    text = activeCategory?.title ?: "Library",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = Cream,
@@ -327,9 +327,9 @@ internal fun PowerampLibraryWorkspace(
                 )
                 Text(
                     text = if (activeCategory == null) {
-                        if (library.isScanning) "Escaneando colección…" else "${library.tracks.size} pistas · Volver al reproductor"
+                        if (library.isScanning) "Scanning collection…" else "${library.tracks.size} tracks · Back to player"
                     } else {
-                        "Categorías de biblioteca"
+                        "Library categories"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = CreamMuted,
@@ -367,7 +367,7 @@ internal fun PowerampLibraryWorkspace(
             IconButton(onClick = onRescan) {
                 Icon(
                     imageVector = Icons.Rounded.Refresh,
-                    contentDescription = "Reescanear",
+                    contentDescription = "Rescan",
                     tint = CreamMuted,
                 )
             }
@@ -391,63 +391,63 @@ internal fun PowerampLibraryWorkspace(
                     CategoryCardSpec(
                         category = LibraryCategory.TODAS_LAS_CANCIONES,
                         icon = Icons.Rounded.MusicNote,
-                        subtitle = "${library.tracks.size} canciones",
+                        subtitle = "${library.tracks.size} songs",
                     ),
                     CategoryCardSpec(
                         category = LibraryCategory.CARPETAS,
                         icon = Icons.Rounded.Folder,
-                        subtitle = "${library.rootFolder?.subfolders?.size ?: 0} carpetas",
+                        subtitle = "${library.rootFolder?.subfolders?.size ?: 0} folders",
                     ),
                     CategoryCardSpec(
                         category = LibraryCategory.ALBUMES,
                         icon = Icons.Rounded.Album,
-                        subtitle = "${library.albums.size} álbumes",
+                        subtitle = "${library.albums.size} albums",
                     ),
                     CategoryCardSpec(
                         category = LibraryCategory.ARTISTAS,
                         icon = Icons.Rounded.Person,
-                        subtitle = "${library.artists.size} artistas",
+                        subtitle = "${library.artists.size} artists",
                     ),
                     CategoryCardSpec(
                         category = LibraryCategory.ARTISTAS_DEL_ALBUM,
                         icon = Icons.Rounded.Group,
-                        subtitle = "${library.albumArtists.size} artistas de álbum",
+                        subtitle = "${library.albumArtists.size} album artists",
                     ),
                     CategoryCardSpec(
                         category = LibraryCategory.GENEROS,
                         icon = Icons.Rounded.Category,
-                        subtitle = "${library.genres.size} géneros",
+                        subtitle = "${library.genres.size} genres",
                     ),
                     CategoryCardSpec(
                         category = LibraryCategory.ANOS,
                         icon = Icons.Rounded.DateRange,
-                        subtitle = "${library.years.size} años",
+                        subtitle = "${library.years.size} years",
                     ),
                     CategoryCardSpec(
                         category = LibraryCategory.COMPOSITORES,
                         icon = Icons.Rounded.Piano,
-                        subtitle = "${library.composers.size} compositores",
+                        subtitle = "${library.composers.size} composers",
                     ),
                     CategoryCardSpec(
                         category = LibraryCategory.LISTAS_DE_REPRODUCCION,
                         icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
-                        subtitle = "Listas personalizadas",
-                        badge = "Pronto",
+                        subtitle = "Custom playlists",
+                        badge = "Soon",
                     ),
                     CategoryCardSpec(
                         category = LibraryCategory.LA_COLA,
                         icon = Icons.AutoMirrored.Rounded.QueueMusic,
-                        subtitle = "$queueCount en cola",
+                        subtitle = "$queueCount in queue",
                     ),
                     CategoryCardSpec(
                         category = LibraryCategory.FAVORITOS,
                         icon = Icons.Rounded.Favorite,
-                        subtitle = "$favoriteCount temas marcados",
+                        subtitle = "$favoriteCount tracks marked",
                     ),
                     CategoryCardSpec(
                         category = LibraryCategory.MAS_REPRODUCIDO,
                         icon = Icons.Rounded.Star,
-                        subtitle = "$playedCount temas escuchados",
+                        subtitle = "$playedCount tracks played",
                     ),
                 )
             }
@@ -472,7 +472,7 @@ internal fun PowerampLibraryWorkspace(
                             border = BorderStroke(1.dp, Gold.copy(alpha = 0.45f)),
                         ) {
                             Column(Modifier.padding(14.dp)) {
-                                Text("No se pudo escanear la biblioteca", color = Cream, fontWeight = FontWeight.Bold)
+                                Text("Could not scan the library", color = Cream, fontWeight = FontWeight.Bold)
                                 Text(message, color = CreamMuted, style = MaterialTheme.typography.bodySmall)
                             }
                         }
@@ -493,13 +493,13 @@ internal fun PowerampLibraryWorkspace(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        "Permiso de audio pendiente",
+                                        "Audio permission pending",
                                         style = MaterialTheme.typography.titleSmall,
                                         color = Cream,
                                         fontWeight = FontWeight.Bold,
                                     )
                                     Text(
-                                        "Concédelo para indexar tus carpetas y pistas locales.",
+                                        "Grant it to index your local folders and tracks.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = CreamMuted,
                                     )
@@ -510,7 +510,7 @@ internal fun PowerampLibraryWorkspace(
                                     colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
                                     shape = RoundedCornerShape(12.dp),
                                 ) {
-                                    Text("Permitir", fontWeight = FontWeight.Bold)
+                                    Text("Allow", fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -564,7 +564,7 @@ internal fun PowerampLibraryWorkspace(
                                 ) {
                                     Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(6.dp))
-                                    Text("Reproducir (${library.filteredTracks.size})", fontWeight = FontWeight.Bold)
+                                    Text("Play (${library.filteredTracks.size})", fontWeight = FontWeight.Bold)
                                 }
                                 OutlinedButton(
                                     onClick = {
@@ -578,7 +578,7 @@ internal fun PowerampLibraryWorkspace(
                                 ) {
                                     Icon(Icons.Rounded.Shuffle, contentDescription = null, tint = Gold, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(6.dp))
-                                    Text("Aleatorio", color = Gold, fontWeight = FontWeight.Bold)
+                                    Text("Shuffle", color = Gold, fontWeight = FontWeight.Bold)
                                 }
                                 SortMenuButton(
                                     current = library.sortMode,
@@ -694,8 +694,8 @@ internal fun PowerampLibraryWorkspace(
                         LibraryCategory.LISTAS_DE_REPRODUCCION -> {
                             UpcomingCategoryPlaceholder(
                                 icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
-                                title = "Listas de reproducción",
-                                description = "Aquí podrás crear tus propias listas, guardar colas actuales e importar archivos M3U/M3U8. Programaremos su lógica en el siguiente paso.",
+                                title = "Playlists",
+                                description = "Here you can create your own playlists, save current queues and import M3U/M3U8 files. Their logic will be implemented in the next step.",
                                 modifier = Modifier.weight(1f),
                             )
                         }
@@ -705,8 +705,8 @@ internal fun PowerampLibraryWorkspace(
                             if (favoriteTracks.isEmpty() && library.query.isBlank()) {
                                 UpcomingCategoryPlaceholder(
                                     icon = Icons.Rounded.Favorite,
-                                    title = "Aún no hay favoritos",
-                                    description = "Marca el corazón en el reproductor para guardar aquí tus canciones locales favoritas.",
+                                    title = "No favorites yet",
+                                    description = "Tap the heart in the player to save your favorite local songs here.",
                                     modifier = Modifier.weight(1f),
                                 )
                             } else {
@@ -729,8 +729,8 @@ internal fun PowerampLibraryWorkspace(
                             if (mostPlayedTracks.isEmpty() && library.query.isBlank()) {
                                 UpcomingCategoryPlaceholder(
                                     icon = Icons.Rounded.Star,
-                                    title = "Aún no hay reproducciones",
-                                    description = "Tus canciones locales se ordenarán aquí a medida que empieces a escucharlas.",
+                                    title = "No plays yet",
+                                    description = "Your local songs will be ranked here as you start listening to them.",
                                     modifier = Modifier.weight(1f),
                                 )
                             } else {
@@ -744,7 +744,7 @@ internal fun PowerampLibraryWorkspace(
                                     onMessage = onMessage,
                                     extraLabel = { track ->
                                         val count = playCounts[track.uri.toString()] ?: 0
-                                        "$count ${if (count == 1) "reproducción" else "reproducciones"}"
+                                        "$count ${if (count == 1) "play" else "plays"}"
                                     },
                                     modifier = Modifier.weight(1f),
                                     bottomPadding = bottomPadding,
@@ -929,8 +929,8 @@ private fun InlineQueueCategoryView(
     if (controller == null || snapshot.items.isEmpty()) {
         UpcomingCategoryPlaceholder(
             icon = Icons.AutoMirrored.Rounded.QueueMusic,
-            title = "La cola está vacía",
-            description = "Reproduce cualquier canción o álbum para armar la cola activa.",
+            title = "The queue is empty",
+            description = "Play any song or album to build the active queue.",
             modifier = modifier,
         )
         return
@@ -952,21 +952,21 @@ private fun InlineQueueCategoryView(
             ) {
                 Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Reordenar cola (${snapshot.totalCount})", fontWeight = FontWeight.Bold)
+                Text("Reorder queue (${snapshot.totalCount})", fontWeight = FontWeight.Bold)
             }
             OutlinedButton(
                 onClick = { QueueManager.toggleShuffle(controller) },
                 border = BorderStroke(1.dp, Gold.copy(alpha = 0.55f)),
                 shape = RoundedCornerShape(12.dp),
             ) {
-                Icon(Icons.Rounded.Shuffle, contentDescription = "Aleatorio", tint = Gold, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.Shuffle, contentDescription = "Shuffle", tint = Gold, modifier = Modifier.size(18.dp))
             }
             OutlinedButton(
                 onClick = { QueueManager.clearUpcoming(controller) },
                 border = BorderStroke(1.dp, Line),
                 shape = RoundedCornerShape(12.dp),
             ) {
-                Icon(Icons.Rounded.DeleteSweep, contentDescription = "Limpiar siguientes", tint = CreamMuted, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.DeleteSweep, contentDescription = "Clear up next", tint = CreamMuted, modifier = Modifier.size(18.dp))
             }
         }
 
@@ -981,8 +981,8 @@ private fun InlineQueueCategoryView(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             itemsIndexed(snapshot.items, key = { idx, item -> "${idx}_${item.mediaItem.mediaId}" }) { idx, item ->
-                val title = item.track?.title ?: item.mediaItem.mediaMetadata.title?.toString().orEmpty().ifBlank { "Sin título" }
-                val artist = item.track?.effectiveArtist ?: item.mediaItem.mediaMetadata.artist?.toString().orEmpty().ifBlank { "Artista desconocido" }
+                val title = item.track?.title ?: item.mediaItem.mediaMetadata.title?.toString().orEmpty().ifBlank { "Untitled" }
+                val artist = item.track?.effectiveArtist ?: item.mediaItem.mediaMetadata.artist?.toString().orEmpty().ifBlank { "Unknown artist" }
                 Surface(
                     color = if (item.isCurrent) Gold.copy(alpha = 0.14f) else InkSoft,
                     shape = RoundedCornerShape(14.dp),
@@ -1147,7 +1147,7 @@ internal fun TagGroupDetailSheet(
                 ) {
                     Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Reproducir", fontWeight = FontWeight.Bold)
+                    Text("Play", fontWeight = FontWeight.Bold)
                 }
                 if (controller != null) {
                     OutlinedButton(
@@ -1157,7 +1157,7 @@ internal fun TagGroupDetailSheet(
                                 group.tracks.map(Track::toMediaItem),
                                 playNext = false,
                             )
-                            onMessage("$count canciones añadidas a la cola")
+                            onMessage("$count songs added to the queue")
                         },
                         border = BorderStroke(1.dp, Gold.copy(alpha = 0.6f)),
                         shape = RoundedCornerShape(12.dp),
@@ -1165,7 +1165,7 @@ internal fun TagGroupDetailSheet(
                     ) {
                         Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = null, tint = Gold, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("A la cola", color = Gold, fontWeight = FontWeight.Bold)
+                        Text("To queue", color = Gold, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1225,10 +1225,10 @@ internal fun PowerampSearchWorkspace(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBackToPlayer) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Volver", tint = Gold, modifier = Modifier.size(26.dp))
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Gold, modifier = Modifier.size(26.dp))
             }
             Text(
-                text = "Búsqueda",
+                text = "Search",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = Cream,
@@ -1393,7 +1393,7 @@ private fun SortMenuButton(current: LibrarySort, onSelect: (LibrarySort) -> Unit
             shape = RoundedCornerShape(12.dp),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            Icon(Icons.Rounded.Sort, contentDescription = "Ordenar la lista", tint = Gold, modifier = Modifier.size(18.dp))
+            Icon(Icons.Rounded.Sort, contentDescription = "Sort list", tint = Gold, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
             Text(current.shortLabel, color = Gold, fontWeight = FontWeight.Bold, fontSize = 12.sp)
         }

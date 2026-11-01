@@ -1,15 +1,15 @@
 package com.kukosin.app.playback
 
 /**
- * Modo de salida de audio. Son cuatro caminos con semántica distinta, no cuatro
- * "drivers" intercambiables:
+ * Audio output path. Four routes with distinct semantics, not four interchangeable
+ * "drivers":
  *
- * | Modo              | Camino                        | Volumen      | Bit-perfect |
+ * | Mode              | Path                          | Volume       | Bit-perfect |
  * |-------------------|-------------------------------|--------------|-------------|
- * | DISABLED          | mezclador de Android          | libre        | nunca       |
- * | DIRECT_DRIVER     | exclusivo + volumen hardware  | en el DAC    | con DAC     |
- * | AAUDIO_EXCLUSIVE  | exclusivo + volumen digital   | en la app    | sólo al 100 % |
- * | USB_DAC           | exclusivo, formato de la pista| fijo al 100 %| sí          |
+ * | DISABLED          | Android mixer                 | free         | never       |
+ * | DIRECT_DRIVER     | exclusive + hardware volume   | on the DAC   | with DAC    |
+ * | AAUDIO_EXCLUSIVE  | exclusive + digital volume    | in the app   | only at 100 % |
+ * | USB_DAC           | exclusive, track format       | fixed at 100 % | yes       |
  */
 enum class OutputMode(
     val label: String,
@@ -17,29 +17,29 @@ enum class OutputMode(
     val description: String,
 ) {
     DISABLED(
-        label = "Desactivado",
-        shortLabel = "Mezclador",
-        description = "Pasa por el mezclador de Android: máxima compatibilidad, pero el " +
-            "sistema puede remuestrear o aplicar efectos. No es bit-perfect.",
-    ),
-    DIRECT_DRIVER(
-        label = "DAC integrado · controlador directo",
-        shortLabel = "Directo",
-        description = "La app abre la salida de auriculares/línea en exclusivo y el volumen " +
-            "se ajusta en el hardware, así que la señal no se atenúa digitalmente. " +
-            "Si hay un DAC USB conectado, pide permiso para tomarlo.",
-    ),
-    AAUDIO_EXCLUSIVE(
-        label = "DAC integrado · AAudio exclusivo",
-        shortLabel = "AAudio excl.",
-        description = "Abre la salida integrada (jack o línea) en exclusivo con la frecuencia " +
-            "de cada pista. El volumen es digital: es bit-perfect sólo al 100 %.",
+        label = "Disabled",
+        shortLabel = "Mixer",
+        description = "Goes through the Android mixer: maximum compatibility, but the " +
+            "system may resample or apply effects. Not bit-perfect.",
     ),
     USB_DAC(
-        label = "DAC USB",
+        label = "USB DAC",
         shortLabel = "USB DAC",
-        description = "Abre el DAC USB con la frecuencia y la profundidad de bits de cada pista, " +
-            "sin mezclar ni remuestrear. El volumen queda fijo: se regula en el DAC.",
+        description = "Opens the USB DAC at each track's sample rate and bit depth, " +
+            "without mixing or resampling. Volume is fixed: adjust it on the DAC.",
+    ),
+    DIRECT_DRIVER(
+        label = "Built-in DAC · direct driver",
+        shortLabel = "Direct",
+        description = "The app opens the headphone/line output exclusively and volume " +
+            "is adjusted in hardware, so the signal is not digitally attenuated. " +
+            "If a USB DAC is connected, it requests permission to take it over.",
+    ),
+    AAUDIO_EXCLUSIVE(
+        label = "Built-in DAC · AAudio exclusive",
+        shortLabel = "AAudio excl.",
+        description = "Opens the built-in output (jack or line) exclusively at each " +
+            "track's sample rate. Volume is digital: bit-perfect only at 100 %.",
     ),
     ;
 
@@ -48,6 +48,9 @@ enum class OutputMode(
 
     /** Modos que exigen stream exclusivo: si el HAL no lo da, se informa el error. */
     val requiresExclusive: Boolean get() = this != DISABLED
+
+    /** Sólo se puede elegir si hay un DAC conectado (el mezclador siempre está disponible). */
+    val requiresDac: Boolean get() = this != DISABLED
 
     /** Volumen fijo al 100 %: la señal no se toca ni se atenúa. */
     val locksVolume: Boolean get() = this == USB_DAC
@@ -68,17 +71,17 @@ enum class OutputMode(
 
     val volumeHint: String
         get() = when {
-            locksVolume -> "Volumen fijo al 100 % · se regula en el DAC"
-            usesHardwareVolume -> "Volumen en el hardware del DAC"
-            usesDigitalVolume -> "Volumen digital (bit-perfect sólo al 100 %)"
-            else -> "Volumen del sistema"
+            locksVolume -> "Fixed volume at 100 % · adjust it on the DAC"
+            usesHardwareVolume -> "Volume in the DAC hardware"
+            usesDigitalVolume -> "Digital volume (bit-perfect only at 100 %)"
+            else -> "System volume"
         }
 
     companion object {
         val entriesInOrder: List<OutputMode> =
-            listOf(AAUDIO_EXCLUSIVE, USB_DAC, DIRECT_DRIVER, DISABLED)
+            listOf(DISABLED, USB_DAC, DIRECT_DRIVER, AAUDIO_EXCLUSIVE)
 
         fun fromName(name: String?): OutputMode =
-            entries.firstOrNull { it.name == name } ?: AAUDIO_EXCLUSIVE
+            entries.firstOrNull { it.name == name } ?: DISABLED
     }
 }

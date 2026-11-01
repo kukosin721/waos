@@ -70,8 +70,8 @@ class OboeAudioOutputProvider(
         val target = AudioRoute.deviceFor(mode)
         if (mode.requiresUsb && target == null) {
             AudioEngineStatus.error(
-                "No hay DAC USB conectado: saliendo por el dispositivo predeterminado. " +
-                    "Conectá el DAC y volvé a intentar.",
+                "No USB DAC connected: using the default device. " +
+                    "Connect the DAC and try again.",
             )
         }
 
@@ -96,7 +96,7 @@ class OboeAudioOutputProvider(
                 engine.close()
                 throw AudioOutputProvider.InitializationException(
                     IllegalStateException(
-                        "Oboe no pudo abrir ${sourceFormat.bits}-bit @ ${config.sampleRate} Hz: " +
+                        "Oboe could not open ${sourceFormat.bits}-bit @ ${config.sampleRate} Hz: " +
                             result.description,
                     ),
                 )
@@ -110,10 +110,10 @@ class OboeAudioOutputProvider(
             // El id puede quedar viejo si el DAC se reconectó: reintento por defecto.
             if (target == null) {
                 AudioEngineStatus.error(
-                    "No se pudo abrir la salida (${sourceFormat.bits}-bit @ ${config.sampleRate} Hz). " +
-                        "Probá " +
-                        if (mode.requiresExclusive) "otro modo de salida o desactivá el modo estricto." else
-                            "otro modo de salida.",
+                    "Could not open the output (${sourceFormat.bits}-bit @ ${config.sampleRate} Hz). " +
+                        "Try " +
+                        if (mode.requiresExclusive) "another output mode or disable strict mode." else
+                            "another output mode.",
                 )
                 throw first
             }
@@ -121,9 +121,9 @@ class OboeAudioOutputProvider(
                 open(0)
             } catch (second: AudioOutputProvider.InitializationException) {
                 AudioEngineStatus.error(
-                    "No se pudo abrir ${deviceLabel()} (${sourceFormat.bits}-bit @ " +
+                    "Could not open ${deviceLabel()} (${sourceFormat.bits}-bit @ " +
                         "${config.sampleRate} Hz): ${second.message}. " +
-                        "Este modo necesita un stream exclusivo que el dispositivo no está dando.",
+                        "This mode needs an exclusive stream the device is not providing.",
                 )
                 throw second
             }
@@ -145,13 +145,13 @@ class OboeAudioOutputProvider(
 
     private fun deviceLabel(): String {
         val target = AudioRoute.deviceFor(mode) ?: return when {
-            mode.targetsUsb -> "Sin DAC USB"
-            else -> "Salida integrada"
+            mode.targetsUsb -> "No USB DAC"
+            else -> "Built-in output"
         }
         val product = target.productName?.toString()?.trim()
         return if (!product.isNullOrEmpty()) product else when {
-            mode.targetsUsb -> "DAC USB"
-            else -> "DAC integrado"
+            mode.targetsUsb -> "USB DAC"
+            else -> "Built-in DAC"
         }
     }
 

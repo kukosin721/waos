@@ -282,7 +282,7 @@ internal fun MiniPlayer(
                     Column(Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                track?.title ?: "Sin canción seleccionada",
+                                track?.title ?: "No song selected",
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 color = Cream,
@@ -302,7 +302,7 @@ internal fun MiniPlayer(
                             }
                         }
                         Text(
-                            track?.let { "${it.effectiveArtist} · ${it.codecLabel}" } ?: "Abre el reproductor",
+                            track?.let { "${it.effectiveArtist} · ${it.codecLabel}" } ?: "Open the player",
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             color = CreamMuted,
@@ -312,12 +312,12 @@ internal fun MiniPlayer(
                     IconButton(onClick = onToggle, enabled = sheetProgress < 0.1f && track != null) {
                         Icon(
                             if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = if (isPlaying) "Pausar" else "Reproducir",
+                            contentDescription = if (isPlaying) "Pause" else "Play",
                             tint = Gold,
                         )
                     }
                     IconButton(onClick = onNext, enabled = sheetProgress < 0.1f && track != null) {
-                        Icon(Icons.Rounded.SkipNext, contentDescription = "Siguiente", tint = Cream)
+                        Icon(Icons.Rounded.SkipNext, contentDescription = "Next", tint = Cream)
                     }
                 }
             }
@@ -358,7 +358,6 @@ internal fun NowPlayingSheet(
     onLyricsDragDelta: (Float) -> Unit,
     onLyricsDragEnd: (Float) -> Unit,
     onLyricsDragCancel: () -> Unit,
-    onOpenLyrics: () -> Unit,
     onCloseLyrics: () -> Unit,
     onRequestPermission: () -> Unit,
     onFallbackPlayFirst: () -> Unit,
@@ -482,7 +481,7 @@ internal fun NowPlayingSheet(
                 } catch (cancel: kotlinx.coroutines.CancellationException) {
                     throw cancel
                 } catch (error: Exception) {
-                    Log.w("KukosinSwipe", "No se pudo cambiar de pista", error)
+                    Log.w("KukosinSwipe", "Could not change track", error)
                     false
                 }
                 if (switched) {
@@ -509,7 +508,7 @@ internal fun NowPlayingSheet(
         } else scaledCenterArt
         Rect(destination.left + dragX, destination.top, destination.right + dragX, destination.bottom)
     }
-    val hitBounds = expandedCoverHitBounds(visibleCoverRect, with(density) { 12.dp.toPx() })
+    val hitBounds = expandedCoverHitBounds(visibleCoverRect, with(density) { 24.dp.toPx() })
     var swipeStep by remember { mutableFloatStateOf(1f) }
     val coverGesture = rememberCoverGestureModifier(
         enabled = interactiveEnabled && sheetProgress >= 0.98f,
@@ -674,7 +673,7 @@ internal fun NowPlayingSheet(
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(horizontal = 24.dp, vertical = 4.dp),
+                .padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(
@@ -704,12 +703,12 @@ internal fun NowPlayingSheet(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = onDismiss, enabled = interactiveEnabled) {
-                        Icon(Icons.Rounded.KeyboardArrowDown, "Minimizar", tint = CreamMuted, modifier = Modifier.size(32.dp))
+                        Icon(Icons.Rounded.KeyboardArrowDown, "Minimize", tint = CreamMuted, modifier = Modifier.size(32.dp))
                     }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("EN REPRODUCCIÓN", style = MaterialTheme.typography.labelMedium, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("NOW PLAYING", style = MaterialTheme.typography.labelMedium, color = Gold, fontWeight = FontWeight.Bold)
                         Text(
-                            if (track == null) "Tu música" else if (track.isLocal) "Música local" else "YouTube Music",
+                            if (track == null) "Your music" else if (track.isLocal) "Local music" else "YouTube Music",
                             style = MaterialTheme.typography.labelSmall,
                             color = CreamMuted,
                         )
@@ -718,7 +717,7 @@ internal fun NowPlayingSheet(
                         IconButton(onClick = onToggleFavorite, enabled = interactiveEnabled) {
                             Icon(
                                 imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                                contentDescription = if (isFavorite) "Quitar de favoritos" else "Añadir a favoritos",
+                                contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
                                 tint = if (isFavorite) Gold else CreamMuted,
                                 modifier = Modifier.size(25.dp),
                             )
@@ -748,14 +747,13 @@ internal fun NowPlayingSheet(
                             }
                             .then(
                                 if (lyricsProgress < 0.5f) {
-                                    Modifier.semantics { contentDescription = "Carátula. Toca para ver la canción en tu biblioteca o desliza hacia arriba para las letras" }
+                                    Modifier.semantics { contentDescription = "Artwork. Tap to see the song in your library or swipe up for lyrics" }
                                 } else {
                                     Modifier.clearAndSetSemantics { }
                                 },
                             )
-                            // Tocar la carátula te lleva a la biblioteca con la canción
-                            // resaltada; las letras se abren deslizando hacia arriba o
-                            // con el botón "Ver letras".
+                            // Tapping the artwork takes you to the library with the
+                            // song highlighted; lyrics open with an upward swipe.
                             .clickable(enabled = interactiveEnabled, onClick = onShowInLibrary),
                     )
                     Column(
@@ -774,7 +772,7 @@ internal fun NowPlayingSheet(
                     ) {
                         Spacer(Modifier.height(12.dp))
                         Text(
-                            text = track?.title ?: "Tu música empieza aquí",
+                            text = track?.title ?: "Your music starts here",
                             style = MaterialTheme.typography.headlineSmall,
                             color = Cream,
                             fontWeight = FontWeight.Bold,
@@ -785,7 +783,7 @@ internal fun NowPlayingSheet(
                         Spacer(Modifier.height(3.dp))
                         Text(
                             text = track?.let { "${it.effectiveArtist} — ${it.album}" }
-                                ?: if (isScanning) "Escaneando tu biblioteca…" else "Elige una canción en Biblioteca o Búsqueda",
+                                ?: if (isScanning) "Scanning your library…" else "Pick a song from Library or Search",
                             style = MaterialTheme.typography.bodyMedium,
                             color = CreamMuted,
                             maxLines = 1,
@@ -794,13 +792,6 @@ internal fun NowPlayingSheet(
                         )
                         Spacer(Modifier.height(5.dp))
                         if (track != null) {
-                            Text(
-                                text = "Toca la carátula para verla en tu biblioteca",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = CreamMuted.copy(alpha = 0.8f),
-                                maxLines = 1,
-                            )
-                            Spacer(Modifier.height(5.dp))
                             Surface(
                                 color = InkSoft,
                                 shape = RoundedCornerShape(10.dp),
@@ -828,29 +819,12 @@ internal fun NowPlayingSheet(
                                     )
                                 }
                             }
-                            Spacer(Modifier.height(6.dp))
-                            // Antes las letras se abrían tocando la carátula; ahora que el
-                            // toque lleva a la biblioteca, quedan acá a un toque de distancia.
-                            Surface(
-                                color = Gold.copy(alpha = 0.14f),
-                                shape = RoundedCornerShape(10.dp),
-                                border = BorderStroke(1.dp, Gold.copy(alpha = 0.55f)),
-                                modifier = Modifier.clickable(enabled = interactiveEnabled, onClick = onOpenLyrics),
-                            ) {
-                                Text(
-                                    "Ver letras",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Gold,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                                )
-                            }
                         } else if (!hasPermission) {
                             Button(
                                 onClick = onRequestPermission,
                                 colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
                                 shape = RoundedCornerShape(12.dp),
-                            ) { Text("Permitir acceso a audio") }
+                            ) { Text("Allow audio access") }
                         }
                         Spacer(Modifier.height(10.dp))
                         KukosinWaveformSlider(
@@ -910,7 +884,7 @@ internal fun NowPlayingSheet(
                                 .then(
                                     if (lyricsProgress > 0.01f) {
                                         Modifier
-                                            .semantics { contentDescription = "Carátula. Toca para cerrar letras" }
+                                            .semantics { contentDescription = "Artwork. Tap to close lyrics" }
                                             .clickable(onClick = onCloseLyrics)
                                     } else Modifier,
                                 ),
@@ -926,12 +900,12 @@ internal fun NowPlayingSheet(
                                         translationX = (1f - lyricsProgress) * 18.dp.toPx()
                                     },
                             ) {
-                                Text(track?.title ?: "Sin canción seleccionada", style = MaterialTheme.typography.titleMedium, color = Cream, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(track?.effectiveArtist ?: "Tu música", style = MaterialTheme.typography.bodySmall, color = CreamMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(track?.qualityLabel ?: "Letras", style = MaterialTheme.typography.labelSmall, color = Gold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(track?.title ?: "No song selected", style = MaterialTheme.typography.titleMedium, color = Cream, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(track?.effectiveArtist ?: "Your music", style = MaterialTheme.typography.bodySmall, color = CreamMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(track?.qualityLabel ?: "Lyrics", style = MaterialTheme.typography.labelSmall, color = Gold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             IconButton(onClick = onCloseLyrics, enabled = interactiveEnabled) {
-                                Icon(Icons.Rounded.KeyboardArrowDown, "Cerrar letras", tint = Gold)
+                                Icon(Icons.Rounded.KeyboardArrowDown, "Close lyrics", tint = Gold)
                             }
                         }
                     }
@@ -1152,14 +1126,14 @@ internal fun PlayerMorphingArtwork(
 internal fun lerpFloat(start: Float, stop: Float, fraction: Float): Float =
     start + (stop - start) * fraction
 
-private fun lerpRect(start: Rect, stop: Rect, fraction: Float): Rect = Rect(
+internal fun lerpRect(start: Rect, stop: Rect, fraction: Float): Rect = Rect(
     left = lerpFloat(start.left, stop.left, fraction),
     top = lerpFloat(start.top, stop.top, fraction),
     right = lerpFloat(start.right, stop.right, fraction),
     bottom = lerpFloat(start.bottom, stop.bottom, fraction),
 )
 
-private fun scaleRectAroundCenter(rect: Rect, scale: Float): Rect {
+internal fun scaleRectAroundCenter(rect: Rect, scale: Float): Rect {
     val cx = rect.center.x
     val cy = rect.center.y
     val hw = rect.width * scale * 0.5f

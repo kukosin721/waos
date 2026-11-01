@@ -51,8 +51,8 @@ class MusicLibraryGroupingTest {
         assertEquals(listOf("Primera"), album.tracks.map { it.title })
         assertEquals(listOf("Segunda"), album.subfolders.single().tracks.map { it.title })
         assertEquals(4, root.totalTracksCount)
-        assertTrue(root.subfolders.any { it.name == "Otras ubicaciones" && it.totalTracksCount == 1 })
-        assertTrue(root.subfolders.any { it.name == "Ubicación desconocida" && it.totalTracksCount == 1 })
+        assertTrue(root.subfolders.any { it.name == "Other locations" && it.totalTracksCount == 1 })
+        assertTrue(root.subfolders.any { it.name == "Unknown location" && it.totalTracksCount == 1 })
     }
 
     @Test
@@ -75,8 +75,8 @@ class MusicLibraryGroupingTest {
             track(3, "Tres", artist = "Cantante C"),
         )
         assertEquals(2, MusicLibrary.groupAlbumArtists(tracks).first { it.name == "Varios" }.trackCount)
-        assertEquals(listOf("Jazz", "Rock", "Sin género"), MusicLibrary.groupGenres(tracks).map { it.name })
-        assertEquals(listOf("2020", "1999", "Año desconocido"), MusicLibrary.groupYears(tracks).map { it.name })
-        assertEquals("Compositor desconocido", MusicLibrary.groupComposers(tracks).last().name)
+        assertEquals(listOf("Jazz", "Rock", "No genre"), MusicLibrary.groupGenres(tracks).map { it.name })
+        assertEquals(listOf("2020", "1999", "Unknown year"), MusicLibrary.groupYears(tracks).map { it.name })
+        assertEquals("Unknown composer", MusicLibrary.groupComposers(tracks).last().name)
     }
 }

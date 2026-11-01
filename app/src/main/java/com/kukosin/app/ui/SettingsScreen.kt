@@ -201,6 +201,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.sin
+@Composable
 internal fun FullScreenSettingsScreen(
     visibilityState: MutableTransitionState<Boolean>,
     output: OutputDevice,
@@ -223,13 +224,17 @@ internal fun FullScreenSettingsScreen(
     onSelectAccent: (AccentPreset) -> Unit,
     onCommitAccent: () -> Unit,
     onResetAccent: () -> Unit,
+    animationSpeed: AnimationSpeed,
+    onSelectAnimationSpeed: (AnimationSpeed) -> Unit,
+    fontOption: FontWeightOption,
+    onSelectFontOption: (FontWeightOption) -> Unit,
     onRescan: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     // Estado real del motor nativo: lo que suena, no lo que pedimos.
     val engineStatus by AudioEngineStatus.status.collectAsState()
     val engineInfo = engineStatus.info
-    val engineStateText = if (engineInfo.opened) "Abierto · ${engineInfo.apiLabel}" else "Sin stream abierto"
+    val engineStateText = if (engineInfo.opened) "Open · ${engineInfo.apiLabel}" else "No open stream"
     LaunchedEffect(engineInfo.opened) {
         while (true) {
             AudioEngineStatus.refresh()
@@ -273,13 +278,10 @@ internal fun FullScreenSettingsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Atrás", tint = Gold, modifier = Modifier.size(28.dp))
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Gold, modifier = Modifier.size(28.dp))
                     }
                     Spacer(Modifier.width(8.dp))
-                    Column {
-                        Text("Configuración de Audio & HiFi", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Gold)
-                        Text("Kukosin High-Resolution Audio Engine", style = MaterialTheme.typography.labelSmall, color = CreamMuted)
-                    }
+                    Text("Settings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Gold)
                 }
 
                 Spacer(Modifier.height(16.dp))
@@ -291,7 +293,7 @@ internal fun FullScreenSettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     item {
-                        Text("Modo de Salida de Audio", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Audio Output Mode", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
@@ -299,28 +301,37 @@ internal fun FullScreenSettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Camino de la señal hasta el DAC", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Text("Signal path to the DAC", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "Cuatro caminos con semántica propia. Sólo los tres exclusivos usan el motor de Oboe, " +
-                                        "y el bit-perfect sólo existe con un DAC: el altavoz interno siempre pasa por el " +
-                                        "DSP y el amplificador del teléfono.",
+                                    "Four paths with their own semantics. Only the exclusive ones use the Oboe " +
+                                        "engine, and bit-perfect only exists with a DAC: the built-in speaker always " +
+                                        "goes through the phone's DSP and amplifier.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = CreamMuted,
                                 )
                                 Spacer(Modifier.height(10.dp))
                                 OutputMode.entriesInOrder.forEach { mode ->
                                     val selected = outputMode == mode
+                                    val modeEnabled = !mode.requiresDac || output.isDac
                                     Surface(
-                                        color = if (selected) Gold.copy(alpha = 0.14f) else Ink,
+                                        color = when {
+                                            selected -> Gold.copy(alpha = 0.14f)
+                                            modeEnabled -> Ink
+                                            else -> Ink.copy(alpha = 0.55f)
+                                        },
                                         shape = RoundedCornerShape(12.dp),
                                         border = androidx.compose.foundation.BorderStroke(
                                             1.dp,
-                                            if (selected) Gold else Cream.copy(alpha = 0.10f),
+                                            when {
+                                                selected -> Gold
+                                                modeEnabled -> Cream.copy(alpha = 0.10f)
+                                                else -> Cream.copy(alpha = 0.05f)
+                                            },
                                         ),
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clickable { onSelectOutputMode(mode) },
+                                            .clickable(enabled = modeEnabled) { onSelectOutputMode(mode) },
                                     ) {
                                         Row(
                                             modifier = Modifier.padding(12.dp),
@@ -331,19 +342,27 @@ internal fun FullScreenSettingsScreen(
                                                     mode.label,
                                                     style = MaterialTheme.typography.titleSmall,
                                                     fontWeight = FontWeight.Bold,
-                                                    color = if (selected) Gold else Cream,
+                                                    color = when {
+                                                        selected -> Gold
+                                                        modeEnabled -> Cream
+                                                        else -> CreamMuted.copy(alpha = 0.45f)
+                                                    },
                                                 )
                                                 Spacer(Modifier.height(2.dp))
                                                 Text(
                                                     mode.description,
                                                     style = MaterialTheme.typography.bodySmall,
-                                                    color = CreamMuted,
+                                                    color = if (modeEnabled) CreamMuted else CreamMuted.copy(alpha = 0.4f),
                                                 )
                                                 Spacer(Modifier.height(4.dp))
                                                 Text(
                                                     mode.volumeHint,
                                                     style = MaterialTheme.typography.labelSmall,
-                                                    color = if (selected) Gold else CreamMuted.copy(alpha = 0.7f),
+                                                    color = when {
+                                                        selected -> Gold
+                                                        modeEnabled -> CreamMuted.copy(alpha = 0.7f)
+                                                        else -> CreamMuted.copy(alpha = 0.35f)
+                                                    },
                                                 )
                                             }
                                             if (selected) {
@@ -354,16 +373,34 @@ internal fun FullScreenSettingsScreen(
                                                     tint = Gold,
                                                     modifier = Modifier.size(18.dp),
                                                 )
+                                            } else if (!modeEnabled) {
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(
+                                                    "Connect a DAC",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = CreamMuted.copy(alpha = 0.45f),
+                                                    fontWeight = FontWeight.Bold,
+                                                )
                                             }
                                         }
                                     }
                                     Spacer(Modifier.height(8.dp))
                                 }
 
+                                if (!output.isDac) {
+                                    Text(
+                                        "No DAC detected: exclusive output modes stay locked until a DAC is connected. " +
+                                            "The app keeps playing through the Android mixer.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFFFFB26B),
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                }
+
                                 if (outputMode.requiresUsb && !output.isUsb) {
                                     Text(
-                                        "No hay DAC USB conectado: en este modo no hay a dónde abrir el stream. " +
-                                            "La app sigue sonando, pero no puede ser bit-perfect.",
+                                        "No USB DAC connected: this mode has nowhere to open the stream. " +
+                                            "The app keeps playing, but it cannot be bit-perfect.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = Color(0xFFFFB26B),
                                     )
@@ -372,7 +409,7 @@ internal fun FullScreenSettingsScreen(
 
                                 if (outputMode.needsUsbPermission && !usbPermissionGranted) {
                                     Text(
-                                        "Este modo necesita permiso USB para tomar el DAC.",
+                                        "This mode needs USB permission to take over the DAC.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = Color(0xFFFFB26B),
                                     )
@@ -385,7 +422,7 @@ internal fun FullScreenSettingsScreen(
                                             .clickable { onRequestUsbPermission() },
                                     ) {
                                         Text(
-                                            "Conceder permiso USB",
+                                            "Grant USB permission",
                                             color = Ink,
                                             fontWeight = FontWeight.Bold,
                                             style = MaterialTheme.typography.labelLarge,
@@ -397,21 +434,21 @@ internal fun FullScreenSettingsScreen(
                                 }
 
                                 Spacer(Modifier.height(4.dp))
-                                SettingsStatusLine("Estado", engineStateText)
+                                SettingsStatusLine("Status", engineStateText)
                                 SettingsStatusLine("API", engineInfo.apiLabel)
-                                SettingsStatusLine("Dispositivo", engineStatus.deviceName.ifBlank { output.name })
+                                SettingsStatusLine("Device", engineStatus.deviceName.ifBlank { output.name })
                                 SettingsStatusLine("Stream", engineInfo.streamLabel)
                                 SettingsStatusLine(
-                                    "Bit-perfect ahora",
+                                    "Bit-perfect now",
                                     when {
-                                        engineStatus.bitPerfectNow -> "Sí · exclusivo, sin conversión, volumen 100 %"
-                                        engineStatus.mode == OutputMode.DISABLED -> "No · modo Desactivado (mezclador Android)"
-                                        engineStatus.builtinSpeaker -> "No · el altavoz interno no puede ser bit-perfect"
-                                        engineStatus.eqActive -> "No · ecualizador activo (DSP de 64 bits)"
-                                        !engineInfo.opened -> "Sin stream abierto"
-                                        !engineInfo.exclusive -> "No · el mezclador comparte la salida"
-                                        engineInfo.converted -> "No · convertido al formato del DAC"
-                                        engineInfo.volumePercent < 100 -> "No · volumen al ${engineInfo.volumePercent} %"
+                                        engineStatus.bitPerfectNow -> "Yes · exclusive, no conversion, volume 100 %"
+                                        engineStatus.mode == OutputMode.DISABLED -> "No · Disabled mode (Android mixer)"
+                                        engineStatus.builtinSpeaker -> "No · the built-in speaker cannot be bit-perfect"
+                                        engineStatus.eqActive -> "No · equalizer active (64-bit DSP)"
+                                        !engineInfo.opened -> "No open stream"
+                                        !engineInfo.exclusive -> "No · the mixer shares the output"
+                                        engineInfo.converted -> "No · converted to the DAC format"
+                                        engineInfo.volumePercent < 100 -> "No · volume at ${engineInfo.volumePercent} %"
                                         else -> "No"
                                     },
                                     highlight = engineStatus.bitPerfectNow,
@@ -424,13 +461,13 @@ internal fun FullScreenSettingsScreen(
                                     )
                                     SettingsStatusLine(
                                         "Xruns",
-                                        if (engineInfo.xRuns < 0) "No reportado" else engineInfo.xRuns.toString(),
+                                        if (engineInfo.xRuns < 0) "Not reported" else engineInfo.xRuns.toString(),
                                     )
                                     if (engineInfo.xRuns > 0) {
                                         Spacer(Modifier.height(6.dp))
                                         Text(
-                                            "Hubo ${engineInfo.xRuns} xrun: el motor se quedó sin datos o el sistema " +
-                                                "no lo atendió a tiempo. Si se escucha un chasquido, subí el Buffer de salida.",
+                                            "There were ${engineInfo.xRuns} xruns: the engine ran out of data or the system " +
+                                                "did not service it in time. If you hear a click, raise the output buffer.",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = Color(0xFFFFB26B),
                                         )
@@ -449,7 +486,7 @@ internal fun FullScreenSettingsScreen(
                     }
 
                     item {
-                        Text("Frecuencias Permitidas por el Hardware DAC", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Sample Rates Supported by the DAC Hardware", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
@@ -459,7 +496,7 @@ internal fun FullScreenSettingsScreen(
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text(output.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Gold)
                                 Spacer(Modifier.height(4.dp))
-                                Text("Frecuencias de muestreo reportadas por la salida activa:", style = MaterialTheme.typography.bodySmall, color = CreamMuted)
+                                Text("Sample rates reported by the active output:", style = MaterialTheme.typography.bodySmall, color = CreamMuted)
                                 Spacer(Modifier.height(8.dp))
                                 Text(
                                     text = output.sampleRatesLabel.ifBlank { "44.1 kHz, 48.0 kHz, 88.2 kHz, 96.0 kHz, 176.4 kHz, 192.0 kHz, 384.0 kHz" },
@@ -472,7 +509,7 @@ internal fun FullScreenSettingsScreen(
                     }
 
                     item {
-                        Text("Bit-Perfect Estricto", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Strict Bit-Perfect", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
@@ -485,12 +522,12 @@ internal fun FullScreenSettingsScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text("Nunca convertir", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                    Text("Never convert", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
                                     Spacer(Modifier.height(4.dp))
                                     Text(
-                                        "Si el DAC no acepta el formato exacto, la reproducción falla y avisa en vez de " +
-                                            "resamplear por atrás. Apagado (recomendado), intenta bit-perfect primero y " +
-                                            "sólo si no se puede convierte con el resampler Kaiser del motor.",
+                                        "If the DAC does not accept the exact format, playback fails and reports it instead of " +
+                                            "resampling behind your back. Off (recommended) tries bit-perfect first and " +
+                                            "only converts with the engine's Kaiser resampler when unavoidable.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = CreamMuted,
                                     )
@@ -511,7 +548,7 @@ internal fun FullScreenSettingsScreen(
                     }
 
                     item {
-                        Text("Fundidos de Entrada y Salida", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Fade In and Out", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
@@ -524,12 +561,12 @@ internal fun FullScreenSettingsScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text("Fundidos suaves", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                    Text("Smooth fades", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
                                     Spacer(Modifier.height(4.dp))
                                     Text(
-                                        "25 ms al arrancar y 60 ms al pausar o detener, más un fundido corto después de " +
-                                            "cada salto: sin clics ni cortes secos. Apagalo si querés la señal intacta " +
-                                            "desde el primer frame (durante el fundido la ganancia no es 100 %).",
+                                        "25 ms on start and 60 ms on pause/stop, plus a short fade after " +
+                                            "each seek: no clicks or hard cuts. Turn it off if you want the signal intact " +
+                                            "from the first frame (gain is not 100 % during the fade).",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = CreamMuted,
                                     )
@@ -550,7 +587,7 @@ internal fun FullScreenSettingsScreen(
                     }
 
                     item {
-                        Text("Buffer de Salida", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Output Buffer", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
@@ -558,12 +595,12 @@ internal fun FullScreenSettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Buffer interno del motor ($bufferMs ms)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Text("Engine internal buffer ($bufferMs ms)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "Es el buffer del motor en memoria de la app, el que absorbe los tirones del " +
-                                        "decodificador. El buffer de hardware de AAudio se queda en el mínimo (2 ráfagas) " +
-                                        "para que un salto o un desplazamiento sea instantáneo: vaciarlo no cuesta nada.",
+                                    "This is the engine's in-memory buffer, the one that absorbs decoder " +
+                                        "hiccups. The AAudio hardware buffer stays at the minimum (2 bursts) " +
+                                        "so a seek is instant: draining it costs nothing.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = CreamMuted,
                                 )
@@ -598,7 +635,7 @@ internal fun FullScreenSettingsScreen(
                     }
 
                     item {
-                        Text("Decodificador", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Decoder", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
@@ -606,12 +643,12 @@ internal fun FullScreenSettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Profundidad real del PCM", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Text("Real PCM bit depth", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "Define con qué profundidad sale el PCM del decoder. El decodificador del sistema " +
-                                        "(MediaCodec) entrega la profundidad real del archivo; FFmpeg es más compatible con " +
-                                        "formatos raros (APE, DSD, WavPack) pero entrega 16 bits.",
+                                    "Defines the PCM bit depth coming out of the decoder. The system decoder " +
+                                        "(MediaCodec) delivers the file's real depth; FFmpeg is more compatible with " +
+                                        "unusual formats (APE, DSD, WavPack) but outputs 16-bit.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = CreamMuted,
                                 )
@@ -620,7 +657,7 @@ internal fun FullScreenSettingsScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
-                                    listOf("Automático", "MediaCodec", "FFmpeg (Lossless)").forEach { option ->
+                                    listOf("Automatic", "MediaCodec", "FFmpeg (Lossless)").forEach { option ->
                                         val selected = decoder == option
                                         Surface(
                                             color = if (selected) Gold else Ink,
@@ -646,7 +683,7 @@ internal fun FullScreenSettingsScreen(
                     }
 
                     item {
-                        Text("Análisis Espectral y Autenticidad", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Spectral Analysis and Authenticity", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
@@ -659,10 +696,10 @@ internal fun FullScreenSettingsScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text("Análisis Espectral Automático", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                    Text("Automatic Spectral Analysis", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
                                     Spacer(Modifier.height(4.dp))
                                     Text(
-                                        "Decodificar muestras PCM y calcular espectro FFT de 4096 puntos automáticamente al reproducir pistas.",
+                                        "Decode PCM samples and compute a 4096-point FFT spectrum automatically while tracks play.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = CreamMuted,
                                     )
@@ -683,7 +720,7 @@ internal fun FullScreenSettingsScreen(
                     }
 
                     item {
-                        Text("Biblioteca y Deduplicación", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Library and Deduplication", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
@@ -691,10 +728,10 @@ internal fun FullScreenSettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Deduplicación de Pistas Activa", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Text("Track Deduplication Active", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "Filtrado inteligente por ruta de archivo para evitar canciones duplicadas entre MediaStore Audio y MediaStore Files.",
+                                    "Smart filtering by file path to avoid duplicate songs between MediaStore Audio and MediaStore Files.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = CreamMuted,
                                 )
@@ -709,14 +746,14 @@ internal fun FullScreenSettingsScreen(
                                 ) {
                                     Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(8.dp))
-                                    Text("Rescanear Biblioteca Completa", fontWeight = FontWeight.Bold)
+                                    Text("Rescan Full Library", fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
                     }
 
                     item {
-                        Text("Personalización", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Personalization", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
@@ -724,10 +761,10 @@ internal fun FullScreenSettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Color de Acento", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Text("Accent Color", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "El dorado de fábrica se puede cambiar por otro tono. Se aplica a toda la app y queda guardado.",
+                                    "The factory gold can be changed to another tone. It applies to the whole app and is saved.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = CreamMuted,
                                 )
@@ -780,7 +817,7 @@ internal fun FullScreenSettingsScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                 ) {
-                                    Text("Tono fino", style = MaterialTheme.typography.labelMedium, color = CreamMuted)
+                                    Text("Fine hue", style = MaterialTheme.typography.labelMedium, color = CreamMuted)
                                     Text(
                                         "${accentHue.toInt()}°",
                                         style = MaterialTheme.typography.labelMedium,
@@ -804,7 +841,7 @@ internal fun FullScreenSettingsScreen(
                                     horizontalArrangement = Arrangement.End,
                                 ) {
                                     Text(
-                                        "Volver al oro",
+                                        "Back to gold",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = Gold,
                                         fontWeight = FontWeight.Bold,
@@ -819,7 +856,7 @@ internal fun FullScreenSettingsScreen(
                     }
 
                     item {
-                        Text("Acerca de Kukosin Player", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Animations", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
@@ -827,13 +864,85 @@ internal fun FullScreenSettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Kukosin HiFi Audio Player v1.0.0", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Text("Animation speed", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "Motor de reproducción lossless impulsado por Android Jetpack Media3, decodificadores nativos FFmpeg, NextLib MediaInfo y análisis de espectro FFT.",
+                                    "Scales every transition and animation in the app. Off makes them instant.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = CreamMuted,
                                 )
+                                Spacer(Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    AnimationSpeed.entries.forEach { option ->
+                                        val selected = animationSpeed == option
+                                        Surface(
+                                            color = if (selected) Gold else Ink,
+                                            shape = RoundedCornerShape(10.dp),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, Gold),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable { onSelectAnimationSpeed(option) },
+                                        ) {
+                                            Text(
+                                                text = option.label,
+                                                color = if (selected) Ink else Gold,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                                textAlign = TextAlign.Center,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Text("Typography", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                        Surface(
+                            color = InkSoft,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text("Font weight", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Default keeps Google Sans regular. Bold renders all base text in bold.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = CreamMuted,
+                                )
+                                Spacer(Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    FontWeightOption.entries.forEach { option ->
+                                        val selected = fontOption == option
+                                        Surface(
+                                            color = if (selected) Gold else Ink,
+                                            shape = RoundedCornerShape(10.dp),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, Gold),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable { onSelectFontOption(option) },
+                                        ) {
+                                            Text(
+                                                text = option.label,
+                                                color = if (selected) Ink else Gold,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                                textAlign = TextAlign.Center,
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -847,7 +956,6 @@ internal fun FullScreenSettingsScreen(
     }
 }
 
-@Composable
 /** Fila etiqueta/valor del panel del motor. */
 @Composable
 internal fun SettingsStatusLine(label: String, value: String, highlight: Boolean = false) {

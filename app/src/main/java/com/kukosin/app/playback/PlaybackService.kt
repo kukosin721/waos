@@ -103,9 +103,9 @@ class PlaybackService : MediaSessionService() {
             val audioSinkFailure = error.errorCode in 5000..5099
             AudioEngineStatus.error(
                 if (audioSinkFailure) {
-                    "Falló la salida de audio (${error.errorCode}). Reintentando con la ruta actual…"
+                    "Audio output failed (${error.errorCode}). Retrying with the current route…"
                 } else {
-                    "Error de reproducción (${error.errorCode}): ${error.message ?: "sin detalle"}"
+                    "Playback error (${error.errorCode}): ${error.message ?: "no details"}"
                 },
             )
             if (!audioSinkFailure || audioRetries >= 1) return
@@ -197,9 +197,9 @@ class PlaybackService : MediaSessionService() {
             // El resolver es síncrono por contrato (se ejecuta en el hilo de carga de ExoPlayer).
             runBlocking { YtmService.resolveAudio(videoId) }
         } catch (throwable: Throwable) {
-            Log.w(TAG, "stream $videoId falló: ${describeYtmError(throwable)}")
+            Log.w(TAG, "stream $videoId failed: ${describeYtmError(throwable)}")
             throw IOException(
-                "No se pudo resolver el audio de YouTube Music: ${describeYtmError(throwable)}",
+                "Could not resolve YouTube Music audio: ${describeYtmError(throwable)}",
                 throwable,
             )
         }
@@ -216,7 +216,7 @@ class PlaybackService : MediaSessionService() {
      *
      * Resolver una URL de YouTube Music tarda ~1,4 s en frío. Si se hace recién al abrir el
      * stream, entre canción y canción se siente un silencio largo. Acá se llena la caché de
-     * [YtmService] con anticipación, así el "siguiente" arranca casi instantáneo.
+     * [YtmService] con anticipación, así el "next" arranca casi instantáneo.
      */
     private val prefetchListener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {

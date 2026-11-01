@@ -25,7 +25,7 @@ class HiFiRenderersFactory(context: Context) : NextRenderersFactory(context) {
         val config = AudioSettingsManager.configState.value
         val extensionMode = when (config.decoder) {
             "MediaCodec" -> EXTENSION_RENDERER_MODE_OFF
-            "Automático" -> EXTENSION_RENDERER_MODE_ON
+            "Automatic" -> EXTENSION_RENDERER_MODE_ON
             else -> EXTENSION_RENDERER_MODE_PREFER
         }
         setExtensionRendererMode(extensionMode)
@@ -48,7 +48,7 @@ class HiFiRenderersFactory(context: Context) : NextRenderersFactory(context) {
             .setEnableFloatOutput(false)
             .setAudioProcessors(processors.toTypedArray())
 
-        // Modo "Desactivado": AudioTrack puro, el mezclador de Android decide.
+        // Modo "Disabled": AudioTrack puro, el mezclador de Android decide.
         // Los otros tres abren el motor de Oboe con su propia política.
         if (mode.usesEngine) {
             builder.setAudioOutputProvider(OboeAudioOutputProvider(mode))

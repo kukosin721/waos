@@ -45,7 +45,7 @@ import kotlin.random.Random
  * Waveform SeekBar con controles DENTRO de la onda (como tu GIF).
  *
  * - La onda se DESPLAZA bajo aguja Gold fija: progress 0..1 -> contenido -progress*contentW
- * - Drag parte SIEMPRE desde 1:43 (o donde estés), no salta a 0:00. Velocidad 0.32x sútil.
+ * - Drag always starts at the current position (never jumps to 0:00). Slow, precise 0.16x.
  * - Cada canción tiene su onda única (seed = hash de trackKey)
  * - Onda amplia y adaptable + botones centrados en la onda (no en el Box)
  */
@@ -56,7 +56,7 @@ fun KukosinWaveformSlider(
     modifier: Modifier = Modifier,
     waveHeight: Dp = 128.dp,
     waveform: List<Float>? = null,
-    trackKey: String? = null, // pásale track.uri.toString() o "title|artist" -> onda única por canción
+    trackKey: String? = null, // pass track.uri.toString() or "title|artist" -> unique wave per song
     isPlaying: Boolean = true,
     enabled: Boolean = true,
     onPlayPause: () -> Unit = {},
@@ -98,6 +98,13 @@ fun KukosinWaveformSlider(
         targetValue = if (isPlaying) 1f else 0.96f,
         animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing),
         label = "waveScale"
+    )
+    // Mientras se arrastra la onda los controles se vuelven translúcidos para no
+    // tapar la parte de la canción que se está eligiendo.
+    val controlsAlpha by animateFloatAsState(
+        targetValue = if (isDragging) 0.26f else 1f,
+        animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing),
+        label = "waveControlsAlpha"
     )
 
     val bars = remember(waveform, trackKey) {
@@ -149,7 +156,7 @@ fun KukosinWaveformSlider(
                 .fillMaxSize()
                 .pointerInput(bars, enabled) {
                     if (!enabled) return@pointerInput
-                    val sensitivity = 0.22f // más lenta y precisa (antes 0.32)
+                    val sensitivity = 0.16f // slower and more precise (was 0.32)
                     var startProgress = 0f
 
                     detectHorizontalDragGestures(
@@ -174,7 +181,7 @@ fun KukosinWaveformSlider(
                     if (!enabled) return@pointerInput
                     detectTapGestures { offset ->
                         val centerX = size.width / 2f
-                        val delta = (offset.x - centerX) * 0.22f / size.width.toFloat()
+                        val delta = (offset.x - centerX) * 0.16f / size.width.toFloat()
                         val base = currentClamped
                         onSeek((base + delta).coerceIn(0f, 1f))
                     }
@@ -238,11 +245,12 @@ fun KukosinWaveformSlider(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(waveHDp + waveTopDp * 2) // área exacta de la onda
+                .height(waveHDp + waveTopDp * 2) // exact wave area
                 .align(Alignment.TopCenter),
             contentAlignment = Alignment.Center
         ) {
             Row(
+                modifier = Modifier.graphicsLayer { alpha = controlsAlpha },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
             ) {
@@ -258,7 +266,7 @@ fun KukosinWaveformSlider(
                     enabled = enabled,
                     modifier = Modifier.size(52.dp).background(InkElevated, CircleShape).border(1.dp, Gold.copy(alpha = 0.32f), CircleShape),
                     colors = IconButtonDefaults.iconButtonColors(contentColor = Cream),
-                ) { Icon(Icons.Rounded.SkipPrevious, "Ant", Modifier.size(26.dp)) }
+                ) { Icon(Icons.Rounded.SkipPrevious, "Prev", Modifier.size(26.dp)) }
                 Spacer(Modifier.width(12.dp))
                 IconButton(
                     onClick = onPlayPause,
@@ -272,7 +280,7 @@ fun KukosinWaveformSlider(
                     enabled = enabled,
                     modifier = Modifier.size(52.dp).background(InkElevated, CircleShape).border(1.dp, Gold.copy(alpha = 0.32f), CircleShape),
                     colors = IconButtonDefaults.iconButtonColors(contentColor = Cream),
-                ) { Icon(Icons.Rounded.SkipNext, "Sig", Modifier.size(26.dp)) }
+                ) { Icon(Icons.Rounded.SkipNext, "Next", Modifier.size(26.dp)) }
                 Spacer(Modifier.width(6.dp))
                 IconButton(
                     onClick = onRepeat,

@@ -31,9 +31,18 @@ data class OutputDevice(
 @OptIn(UnstableApi::class)
 object AudioRoute {
     private val output = MutableStateFlow(
-        OutputDevice("Salida del sistema", isDac = false, typeLabel = "Predeterminada"),
+        OutputDevice("System output", isDac = false, typeLabel = "Default"),
     )
     val current: StateFlow<OutputDevice> = output.asStateFlow()
+
+    /**
+     * `false` hasta que [attach] haya leído los dispositivos reales al menos una vez.
+     * La UI espera esta señal antes de forzar el modo seguro: si arrancara con el
+     * valor inicial (`isDac = false`) resetearía el modo de un DAC conectado antes
+     * de que el servicio de reproducción lo detecte.
+     */
+    private val ready = MutableStateFlow(false)
+    val isReady: StateFlow<Boolean> = ready.asStateFlow()
 
     @Volatile
     var preferredAudioDevice: AudioDeviceInfo? = null
@@ -52,50 +61,72 @@ object AudioRoute {
      */
     private var deviceCallback: AudioDeviceCallback? = null
     private var audioManager: AudioManager? = null
+    private var attachedPlayer: Player? = null
+
+    /**
+     * Detecta la salida activa sin necesitar un reproductor. Se llama al arrancar la
+     * app para que Ajustes sepa si hay un DAC antes de que exista un stream.
+     */
+    fun init(context: Context) {
+        appContext = context.applicationContext
+        UsbDacManager.init(context)
+        val manager = context.getSystemService(AudioManager::class.java) ?: return
+        audioManager = manager
+        applyRoute(context, requestPermission = false)
+        registerDeviceCallback(context)
+    }
 
     fun attach(context: Context, player: Player) {
         appContext = context.applicationContext
         UsbDacManager.init(context)
-        val audioManager = context.getSystemService(AudioManager::class.java) ?: return
-        this.audioManager = audioManager
+        val manager = context.getSystemService(AudioManager::class.java) ?: return
+        audioManager = manager
+        attachedPlayer = player
+        applyRoute(context, requestPermission = true)
+        registerDeviceCallback(context)
+    }
 
-        fun applyRoute() {
-            val device = pickPreferred(audioManager)
-            preferredAudioDevice = device
-            val usbInfo = UsbDacManager.current.value
-            if (usbInfo.hasUsbDevice && !usbInfo.hasPermission) {
-                UsbDacManager.requestPermission(context)
-            }
-            output.value = describe(device, audioManager, usbInfo)
-            if (player is ExoPlayer) {
-                if (device != null && device.type != AudioDeviceInfo.TYPE_BUILTIN_SPEAKER && device.type != AudioDeviceInfo.TYPE_BUILTIN_EARPIECE) {
-                    player.setPreferredAudioDevice(device)
-                } else {
-                    player.setPreferredAudioDevice(null)
-                }
+    private fun applyRoute(context: Context, requestPermission: Boolean) {
+        val manager = audioManager ?: return
+        val device = pickPreferred(manager)
+        preferredAudioDevice = device
+        val usbInfo = UsbDacManager.current.value
+        if (requestPermission && usbInfo.hasUsbDevice && !usbInfo.hasPermission) {
+            UsbDacManager.requestPermission(context)
+        }
+        output.value = describe(device, manager, usbInfo)
+        ready.value = true
+        val player = attachedPlayer
+        if (player is ExoPlayer) {
+            if (device != null && device.type != AudioDeviceInfo.TYPE_BUILTIN_SPEAKER && device.type != AudioDeviceInfo.TYPE_BUILTIN_EARPIECE) {
+                player.setPreferredAudioDevice(device)
+            } else {
+                player.setPreferredAudioDevice(null)
             }
         }
+    }
 
-        applyRoute()
-        if (deviceCallback == null) {
-            val callback = object : AudioDeviceCallback() {
-                override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
-                    UsbDacManager.scanDevices(context)
-                    applyRoute()
-                }
-
-                override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
-                    UsbDacManager.scanDevices(context)
-                    applyRoute()
-                }
+    private fun registerDeviceCallback(context: Context) {
+        if (deviceCallback != null) return
+        val manager = audioManager ?: return
+        val callback = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                UsbDacManager.scanDevices(context)
+                applyRoute(context, requestPermission = true)
             }
-            audioManager.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
-            deviceCallback = callback
+
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+                UsbDacManager.scanDevices(context)
+                applyRoute(context, requestPermission = true)
+            }
         }
+        manager.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
+        deviceCallback = callback
     }
 
     /** Deja de escuchar cambios de dispositivo (al cerrar el servicio). */
     fun detach() {
+        attachedPlayer = null
         val callback = deviceCallback ?: return
         audioManager?.unregisterAudioDeviceCallback(callback)
         deviceCallback = null
@@ -167,7 +198,7 @@ object AudioRoute {
 
     private fun describe(device: AudioDeviceInfo?, audioManager: AudioManager, usbInfo: UsbDacInfo): OutputDevice {
         if (device == null) {
-            return OutputDevice("Salida del sistema", isDac = false, typeLabel = "Predeterminada")
+            return OutputDevice("System output", isDac = false, typeLabel = "Default")
         }
         val isUsbDac = device.type == AudioDeviceInfo.TYPE_USB_DEVICE ||
             device.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
@@ -177,20 +208,20 @@ object AudioRoute {
         val isDac = isUsbDac || isLineDac
 
         val typeLabel = when {
-            isUsbDac -> "DAC USB (Host)"
-            isLineDac -> "Salida de línea HiFi"
-            device.type == AudioDeviceInfo.TYPE_HDMI || device.type == AudioDeviceInfo.TYPE_HDMI_ARC || device.type == AudioDeviceInfo.TYPE_HDMI_EARC -> "HDMI / Audio Digital"
-            device.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES || device.type == AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Salida Analógica"
+            isUsbDac -> "USB DAC (Host)"
+            isLineDac -> "HiFi line output"
+            device.type == AudioDeviceInfo.TYPE_HDMI || device.type == AudioDeviceInfo.TYPE_HDMI_ARC || device.type == AudioDeviceInfo.TYPE_HDMI_EARC -> "HDMI / Digital Audio"
+            device.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES || device.type == AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Analog output"
             device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || device.type == AudioDeviceInfo.TYPE_BLE_HEADSET || device.type == AudioDeviceInfo.TYPE_BLE_SPEAKER -> "Bluetooth Audio"
-            device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Altavoz Integrado"
-            else -> "Dispositivo de Audio"
+            device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Built-in speaker"
+            else -> "Audio device"
         }
 
         val rates = device.sampleRates.filter { it > 0 }.distinct().sorted()
         val ratesText = if (rates.isNotEmpty()) {
             rates.map { if (it >= 1000) "${it / 1000}kHz" else "${it}Hz" }.joinToString(", ")
         } else {
-            "Hasta 384kHz+ (Direct USB)"
+            "Up to 384kHz+ (Direct USB)"
         }
 
         var bitPerfect = isDac

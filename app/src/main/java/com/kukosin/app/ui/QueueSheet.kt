@@ -129,9 +129,9 @@ private fun MediaItem.toFallbackTrack(): Track {
     return Track(
         id = mediaId.hashCode().toLong(),
         uri = uri,
-        title = meta.title?.toString()?.ifBlank { "Sin título" } ?: "Sin título",
-        artist = meta.artist?.toString()?.ifBlank { "Artista desconocido" } ?: "Artista desconocido",
-        album = meta.albumTitle?.toString()?.ifBlank { "Desconocido" } ?: "Desconocido",
+        title = meta.title?.toString()?.ifBlank { "Untitled" } ?: "Untitled",
+        artist = meta.artist?.toString()?.ifBlank { "Unknown artist" } ?: "Unknown artist",
+        album = meta.albumTitle?.toString()?.ifBlank { "Unknown" } ?: "Unknown",
         durationMs = 0L,
         mimeType = "",
         fileName = "",
@@ -244,15 +244,15 @@ object QueueActions {
     }
 
     fun playNext(controller: MediaController?, track: Track): String {
-        if (controller == null) return "No hay reproductor disponible"
+        if (controller == null) return "No player available"
         QueueManager.addToCustomQueue(controller, listOf(track.toMediaItem()), playNext = true)
-        return "A continuación: ${track.title}"
+        return "Up next: ${track.title}"
     }
 
     fun addToQueue(controller: MediaController?, track: Track): String {
-        if (controller == null) return "No hay reproductor disponible"
+        if (controller == null) return "No player available"
         QueueManager.addToCustomQueue(controller, listOf(track.toMediaItem()), playNext = false)
-        return "Añadido a la cola personalizada: ${track.title}"
+        return "Added to custom queue: ${track.title}"
     }
 
     fun addListToQueue(
@@ -260,16 +260,16 @@ object QueueActions {
         tracks: List<Track>,
         playNext: Boolean = false,
     ): String {
-        if (controller == null || tracks.isEmpty()) return "No hay canciones para agregar"
+        if (controller == null || tracks.isEmpty()) return "No songs to add"
         val added = QueueManager.addToCustomQueue(
             controller,
             tracks.map(Track::toMediaItem),
             playNext = playNext,
         )
         return if (playNext) {
-            "$added canciones se reproducirán a continuación"
+            "$added songs will play next"
         } else {
-            "$added canciones añadidas a la cola personalizada"
+            "$added songs added to the custom queue"
         }
     }
 }
@@ -365,17 +365,17 @@ fun QueueSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     QueueStat(
-                        label = "EN ESPERA",
+                        label = "UP NEXT",
                         value = pendingSize.toString(),
                         modifier = Modifier.weight(1f),
                     )
                     QueueStat(
-                        label = "RESTANTE",
+                        label = "REMAINING",
                         value = formatTime(snapshot.totalRemainingMs),
                         modifier = Modifier.weight(1f),
                     )
                     QueueStat(
-                        label = "SONADAS",
+                        label = "PLAYED",
                         value = historyItems.size.toString(),
                         modifier = Modifier.weight(1f),
                     )
@@ -572,7 +572,7 @@ fun QueueSheet(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "${pendingSize} en espera",
+                        "${pendingSize} up next",
                         style = MaterialTheme.typography.labelSmall,
                         color = CreamMuted,
                     )
@@ -588,7 +588,7 @@ fun QueueSheet(
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            "Vaciar próximas",
+                            "Clear up next",
                             color = if (pendingItems.isNotEmpty()) Gold else CreamMuted.copy(alpha = 0.4f),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
@@ -635,7 +635,7 @@ private fun QueueHeader(
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "Cola de reproducción",
+                        "Playback queue",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = Cream,
@@ -644,12 +644,12 @@ private fun QueueHeader(
                     )
                     if (shuffleEnabled) {
                         Spacer(Modifier.width(6.dp))
-                        Tag(text = "ALEATORIO", color = Gold)
+                        Tag(text = "SHUFFLE", color = Gold)
                     }
                 }
-                val remaining = if (remainingMs > 0) " · ${formatTime(remainingMs)} restantes" else ""
+                val remaining = if (remainingMs > 0) " · ${formatTime(remainingMs)} remaining" else ""
                 Text(
-                    "$totalCount canciones$remaining",
+                    "$totalCount songs$remaining",
                     style = MaterialTheme.typography.labelMedium,
                     color = CreamMuted,
                     maxLines = 1,
@@ -662,14 +662,14 @@ private fun QueueHeader(
             IconButton(onClick = onToggleShuffle) {
                 Icon(
                     imageVector = Icons.Rounded.Shuffle,
-                    contentDescription = "Aleatorio",
+                    contentDescription = "Shuffle",
                     tint = if (shuffleEnabled) Gold else CreamMuted,
                 )
             }
             IconButton(onClick = onDismiss) {
                 Icon(
                     imageVector = Icons.Rounded.Close,
-                    contentDescription = "Cerrar",
+                    contentDescription = "Close",
                     tint = CreamMuted,
                 )
             }
@@ -739,12 +739,12 @@ private fun EmptyQueueState(modifier: Modifier = Modifier) {
             )
             Spacer(Modifier.height(12.dp))
             Text(
-                "La cola está vacía",
+                "The queue is empty",
                 style = MaterialTheme.typography.titleMedium,
                 color = CreamMuted,
             )
             Text(
-                "Reproduce algo desde la biblioteca o añade canciones con “Añadir a cola”",
+                "Play something from the library or add songs with “Add to queue”",
                 style = MaterialTheme.typography.bodySmall,
                 color = CreamMuted.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center,
@@ -775,13 +775,13 @@ private fun CustomQueueBanner(customCount: Int) {
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    "Cola personalizada activa",
+                    "Custom queue active",
                     style = MaterialTheme.typography.labelMedium,
                     color = Gold,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    "$customCount ${if (customCount == 1) "canción" else "canciones"} · al terminar continúa la cola principal",
+                    "$customCount ${if (customCount == 1) "song" else "songs"} · the main queue continues afterwards",
                     style = MaterialTheme.typography.bodySmall,
                     color = CreamMuted,
                 )
@@ -857,7 +857,7 @@ private fun HistoryHeader(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "YA REPRODUCIDAS",
+                    "PLAYED",
                     style = MaterialTheme.typography.labelSmall,
                     color = CreamMuted,
                     fontWeight = FontWeight.Bold,
@@ -867,7 +867,7 @@ private fun HistoryHeader(
             }
             Icon(
                 imageVector = if (expanded) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
-                contentDescription = if (expanded) "Ocultar reproducidas" else "Mostrar reproducidas",
+                contentDescription = if (expanded) "Hide played" else "Show played",
                 tint = CreamMuted,
                 modifier = Modifier.size(20.dp),
             )
@@ -901,7 +901,7 @@ private fun CurrentlyPlayingCard(
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        track?.title ?: "Sin título",
+                        track?.title ?: "Untitled",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = Gold,
@@ -909,7 +909,7 @@ private fun CurrentlyPlayingCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        "${track?.effectiveArtist ?: "Desconocido"} · ${track?.album ?: "Álbum"}",
+                        "${track?.effectiveArtist ?: "Unknown"} · ${track?.album ?: "Album"}",
                         style = MaterialTheme.typography.bodySmall,
                         color = Cream,
                         maxLines = 1,
@@ -935,13 +935,13 @@ private fun CurrentlyPlayingCard(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.GraphicEq,
-                            contentDescription = "En reproducción",
+                            contentDescription = "Now playing",
                             tint = Ink,
                             modifier = Modifier.size(14.dp),
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            if (isPlaying) "Sonando" else "Pausado",
+                            if (isPlaying) "Playing" else "Paused",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = Ink,
@@ -1050,12 +1050,12 @@ private fun SwipeableQueueItemRow(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Rounded.Delete,
-                        contentDescription = "Eliminar",
+                        contentDescription = "Delete",
                         tint = Color.White,
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        "Quitar",
+                        "Remove",
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
@@ -1154,7 +1154,7 @@ private fun QueueItemRow(
 
             Icon(
                 imageVector = Icons.Rounded.DragHandle,
-                contentDescription = "Mantén para reordenar",
+                contentDescription = "Hold to reorder",
                 tint = if (isCustom) Gold.copy(alpha = 0.75f) else CreamMuted.copy(alpha = 0.45f),
                 modifier = Modifier
                     .padding(horizontal = 4.dp)
@@ -1179,7 +1179,7 @@ private fun QueueItemRow(
 
             Column(Modifier.weight(1f)) {
                 Text(
-                    track?.title ?: "Sin título",
+                    track?.title ?: "Untitled",
                     style = MaterialTheme.typography.titleSmall,
                     color = Cream,
                     maxLines = 1,
@@ -1187,7 +1187,7 @@ private fun QueueItemRow(
                 )
                 if (!isCompact) {
                     Text(
-                        "${track?.effectiveArtist ?: "Desconocido"} · ${track?.album ?: "Álbum"}",
+                        "${track?.effectiveArtist ?: "Unknown"} · ${track?.album ?: "Album"}",
                         style = MaterialTheme.typography.bodySmall,
                         color = CreamMuted,
                         maxLines = 1,
@@ -1218,7 +1218,7 @@ private fun QueueItemRow(
             IconButton(onClick = onRemove) {
                 Icon(
                     imageVector = Icons.Rounded.Close,
-                    contentDescription = "Quitar de la cola",
+                    contentDescription = "Remove from queue",
                     tint = CreamMuted.copy(alpha = 0.6f),
                     modifier = Modifier.size(18.dp),
                 )
@@ -1254,7 +1254,7 @@ private fun HistoryItemRow(
             }
             Column(Modifier.weight(1f)) {
                 Text(
-                    track?.title ?: "Sin título",
+                    track?.title ?: "Untitled",
                     style = MaterialTheme.typography.bodyMedium,
                     color = CreamMuted,
                     maxLines = 1,
@@ -1262,7 +1262,7 @@ private fun HistoryItemRow(
                 )
                 if (!isCompact) {
                     Text(
-                        track?.effectiveArtist ?: "Desconocido",
+                        track?.effectiveArtist ?: "Unknown",
                         style = MaterialTheme.typography.labelSmall,
                         color = CreamMuted.copy(alpha = 0.65f),
                         maxLines = 1,
@@ -1273,7 +1273,7 @@ private fun HistoryItemRow(
             IconButton(onClick = onAdd) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Rounded.PlaylistAdd,
-                    contentDescription = "Volver a añadir a la cola",
+                    contentDescription = "Add back to queue",
                     tint = Gold.copy(alpha = 0.85f),
                     modifier = Modifier.size(20.dp),
                 )
@@ -1305,20 +1305,20 @@ fun QueueCustomizationDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "Personalizar Cola",
+                        "Customize Queue",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = Gold,
                     )
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Rounded.Close, contentDescription = "Cerrar", tint = CreamMuted)
+                        Icon(Icons.Rounded.Close, contentDescription = "Close", tint = CreamMuted)
                     }
                 }
 
                 Spacer(Modifier.height(16.dp))
 
                 Text(
-                    "Estilo de elementos en la cola",
+                    "Queue item style",
                     style = MaterialTheme.typography.labelMedium,
                     color = Cream,
                     fontWeight = FontWeight.Bold,
@@ -1337,7 +1337,7 @@ fun QueueCustomizationDialog(
                         colors = RadioButtonDefaults.colors(selectedColor = Gold),
                     )
                     Text(
-                        "Vista Detallada Hi-Fi (con especificaciones)",
+                        "Detailed Hi-Fi view (with specs)",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Cream,
                     )
@@ -1355,7 +1355,7 @@ fun QueueCustomizationDialog(
                         colors = RadioButtonDefaults.colors(selectedColor = Gold),
                     )
                     Text(
-                        "Vista Compacta (más canciones visibles)",
+                        "Compact view (more songs visible)",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Cream,
                     )
@@ -1370,13 +1370,13 @@ fun QueueCustomizationDialog(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "Insignia con contador",
+                            "Counter badge",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold,
                             color = Cream,
                         )
                         Text(
-                            "Muestra el número de temas en el botón de cola",
+                            "Shows the number of tracks on the queue button",
                             style = MaterialTheme.typography.bodySmall,
                             color = CreamMuted,
                         )
@@ -1400,13 +1400,13 @@ fun QueueCustomizationDialog(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "Mostrar ya reproducidas",
+                            "Show played tracks",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold,
                             color = Cream,
                         )
                         Text(
-                            "Mantén a la vista el historial para volver a añadirlo",
+                            "Keep the history in view to add tracks back",
                             style = MaterialTheme.typography.bodySmall,
                             color = CreamMuted,
                         )
@@ -1429,7 +1429,7 @@ fun QueueCustomizationDialog(
                     colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
                     shape = RoundedCornerShape(12.dp),
                 ) {
-                    Text("Listo", fontWeight = FontWeight.Bold)
+                    Text("Done", fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -1451,7 +1451,7 @@ fun TrackOptionsMenu(
         modifier = Modifier.background(InkElevated),
     ) {
         DropdownMenuItem(
-            text = { Text("Reproducir a continuación", color = Cream) },
+            text = { Text("Play next", color = Cream) },
             leadingIcon = {
                 Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, contentDescription = null, tint = Gold)
             },
@@ -1462,7 +1462,7 @@ fun TrackOptionsMenu(
             },
         )
         DropdownMenuItem(
-            text = { Text("Añadir a cola personalizada", color = Cream) },
+            text = { Text("Add to custom queue", color = Cream) },
             leadingIcon = {
                 Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = null, tint = Gold)
             },
@@ -1473,7 +1473,7 @@ fun TrackOptionsMenu(
             },
         )
         DropdownMenuItem(
-            text = { Text("Ficha técnica / Metadatos", color = Cream) },
+            text = { Text("Technical info / Metadata", color = Cream) },
             leadingIcon = {
                 Icon(Icons.Rounded.Info, contentDescription = null, tint = CreamMuted)
             },

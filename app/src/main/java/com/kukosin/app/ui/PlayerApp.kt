@@ -329,6 +329,22 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
     }
     val analysis by viewModel.analysisState.collectAsStateWithLifecycle()
     val audioConfig by viewModel.audioConfig.collectAsStateWithLifecycle()
+    val uiSettings by UiSettingsManager.settings.collectAsStateWithLifecycle()
+    val routeReady by AudioRoute.isReady.collectAsStateWithLifecycle()
+    // Sin DAC conectado sólo tiene sentido el mezclador del sistema: los modos
+    // exclusivos quedan bloqueados y cualquier valor viejo se vuelve seguro.
+    // Se espera a que AudioRoute haya leído los dispositivos reales; si no, el
+    // valor inicial (sin DAC) borraría el modo de un DAC recién conectado.
+    LaunchedEffect(output.isDac, routeReady) {
+        if (routeReady && !output.isDac && audioConfig.outputMode != OutputMode.DISABLED) {
+            viewModel.setOutputMode(OutputMode.DISABLED)
+        }
+    }
+    // El estado del motor refleja el modo elegido incluso cuando no hay stream
+    // abierto (modo Disabled), para que los paneles de estado no mientan.
+    LaunchedEffect(audioConfig.outputMode) {
+        AudioEngineStatus.setMode(audioConfig.outputMode)
+    }
     var showSettings by remember { mutableStateOf(false) }
     val settingsVisibility = remember { MutableTransitionState(false) }
     settingsVisibility.targetState = showSettings
@@ -417,9 +433,9 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
 
     // Reservar espacio a la onda ampliada sin sacar los controles de la pantalla.
     val waveformHeight = if (rootSizePx.height > 0 && with(density) { rootSizePx.height.toDp() } < 720.dp) {
-        108.dp
+        116.dp
     } else {
-        128.dp
+        136.dp
     }
     val maxArtDp = if (rootSizePx.height > 0 && rootSizePx.width > 0) {
         with(density) {
@@ -744,10 +760,9 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                         activeSection = AppSection.LIBRARY
                         libraryFocusUri = uri
                     } else {
-                        userMessage = "Todavía no hay una canción sonando"
+                        userMessage = "No song is playing yet"
                     }
                 },
-                onOpenLyrics = { animateLyrics(1f) },
                 onCloseLyrics = { animateLyrics(0f) },
                 onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
                 onFallbackPlayFirst = {
@@ -854,7 +869,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                         showQueueSheet = true
                         userMessage = null
                     }) {
-                        Text("VER COLA", color = Gold, fontWeight = FontWeight.Bold)
+                        Text("VIEW QUEUE", color = Gold, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -879,9 +894,13 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             onToggleAutoAnalyze = viewModel::toggleAutoAnalyze,
             outputMode = audioConfig.outputMode,
             onSelectOutputMode = { mode ->
-                viewModel.setOutputMode(mode)
-                if (mode.needsUsbPermission && !UsbDacManager.current.value.hasPermission) {
-                    UsbDacManager.requestPermission(context)
+                // Doble candado: la UI ya deshabilita los modos exclusivos sin DAC,
+                // pero el callback tampoco debe aceptarlos.
+                if (!mode.requiresDac || output.isDac) {
+                    viewModel.setOutputMode(mode)
+                    if (mode.needsUsbPermission && !UsbDacManager.current.value.hasPermission) {
+                        UsbDacManager.requestPermission(context)
+                    }
                 }
             },
             strictBitPerfect = audioConfig.strictBitPerfect,
@@ -899,6 +918,10 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             onSelectAccent = { AccentTheme.select(it) },
             onCommitAccent = { AccentTheme.commit() },
             onResetAccent = { AccentTheme.reset() },
+            animationSpeed = uiSettings.animationSpeed,
+            onSelectAnimationSpeed = { UiSettingsManager.setAnimationSpeed(it) },
+            fontOption = uiSettings.fontOption,
+            onSelectFontOption = { UiSettingsManager.setFontOption(it) },
             onRescan = {
                 if (hasPermission) viewModel.rescan() else permissionLauncher.launch(audioPermissions())
             },
@@ -996,7 +1019,7 @@ internal const val SWIPE_FLING_FACTOR = 2.2f
 internal const val SWIPE_EDGE_RESISTANCE = 0.18f
 
 /** Espera (hasta ~600 ms) a que el reproductor publique el cambio de canción. */
-private suspend fun awaitIndexChange(controller: MediaController, previousIndex: Int): Boolean {
+internal suspend fun awaitIndexChange(controller: MediaController, previousIndex: Int): Boolean {
     val deadline = System.currentTimeMillis() + 600
     while (System.currentTimeMillis() < deadline) {
         if (controller.currentMediaItemIndex != previousIndex) return true

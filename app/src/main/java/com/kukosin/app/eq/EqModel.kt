@@ -34,8 +34,8 @@ data class EqSettings(
     val preampDb: Float = 0f,
     /** Si está activo, resta automáticamente el máximo refuerzo para no clipear. */
     val autoHeadroom: Boolean = true,
-    /** Solo informativo para la UI (nombre del preset aplicado o "Personalizado"). */
-    val presetName: String = "Plano",
+    /** Solo informativo para la UI (nombre del preset aplicado o "Custom"). */
+    val presetName: String = "Flat",
     val bands: List<EqBand> = DefaultEqBands,
 ) {
     /** Máximo refuerzo aplicado por una banda (>= 0). */
@@ -111,7 +111,7 @@ data class EqSettings(
         const val MAX_FREQ_HZ = 20000f
         const val MIN_Q = 0.30f
         const val MAX_Q = 6f
-        const val CUSTOM_PRESET = "Personalizado"
+        const val CUSTOM_PRESET = "Custom"
         /** Rate de referencia para dibujar la curva y calcular el headroom. */
         const val REFERENCE_SAMPLE_RATE = 48_000.0
 
@@ -144,16 +144,16 @@ object EqPresets {
     data class Preset(val name: String, val gainsDb: List<Float>)
 
     val all: List<Preset> = listOf(
-        Preset("Plano", listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)),
-        Preset("Cálido", listOf(3f, 2.5f, 1.5f, 0.5f, 0f, -0.5f, -1f, -1f, -0.5f, 0f)),
-        Preset("Cristal", listOf(-1f, -0.5f, 0f, 0f, 0.5f, 1f, 1.5f, 2f, 2.5f, 2f)),
+        Preset("Flat", listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)),
+        Preset("Warm", listOf(3f, 2.5f, 1.5f, 0.5f, 0f, -0.5f, -1f, -1f, -0.5f, 0f)),
+        Preset("Crystal", listOf(-1f, -0.5f, 0f, 0f, 0.5f, 1f, 1.5f, 2f, 2.5f, 2f)),
         Preset("Vocal", listOf(-2f, -1f, 0f, 1f, 2.5f, 3f, 2f, 1f, 0f, -1f)),
         Preset("Rock", listOf(4f, 3f, 1.5f, -0.5f, -1.5f, -0.5f, 1f, 2.5f, 3f, 3.5f)),
         Preset("Pop", listOf(-1f, 0.5f, 2f, 3f, 1.5f, 0f, -1f, -0.5f, 1.5f, 2f)),
         Preset("Jazz", listOf(2.5f, 1.5f, 0.5f, 1f, -0.5f, -1f, 0f, 1f, 1.5f, 2f)),
-        Preset("Clásica", listOf(2f, 1f, 0f, 0f, 0f, 0f, -0.5f, -1f, -1.5f, -2f)),
-        Preset("Bajos", listOf(6f, 5f, 3.5f, 1f, 0f, -0.5f, -1f, -1f, -0.5f, 0f)),
-        Preset("Firma V", listOf(5f, 4f, 2f, 0f, -1.5f, -2f, -1f, 1.5f, 3.5f, 4.5f)),
+        Preset("Classic", listOf(2f, 1f, 0f, 0f, 0f, 0f, -0.5f, -1f, -1.5f, -2f)),
+        Preset("Bass", listOf(6f, 5f, 3.5f, 1f, 0f, -0.5f, -1f, -1f, -0.5f, 0f)),
+        Preset("V signature", listOf(5f, 4f, 2f, 0f, -1.5f, -2f, -1f, 1.5f, 3.5f, 4.5f)),
     )
 
     val default: Preset get() = all.first()
@@ -178,9 +178,9 @@ fun EqSettings.applyingPreset(preset: EqPresets.Preset): EqSettings = copy(
  * perfil sola cuando cambia la salida.
  */
 enum class EqProfile(val label: String, val hint: String) {
-    BUILTIN("Altavoz", "El altavoz interno nunca suena igual que unos auriculares"),
-    WIRED("Auriculares / línea", "Jack o USB-C sin DAC propio"),
-    USB("DAC USB", "El DAC externo tiene su propia respuesta"),
+    BUILTIN("Speaker", "The built-in speaker never sounds like headphones"),
+    WIRED("Headphones / line", "Jack or USB-C without its own DAC"),
+    USB("USB DAC", "The external DAC has its own response"),
     ;
 
     companion object {

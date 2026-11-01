@@ -105,9 +105,9 @@ object LibraryCacheStore {
         return Track(
             id = json.optLong("id", 0L),
             uri = Uri.parse(uriString),
-            title = json.optString("title", "Sin título"),
-            artist = json.optString("artist", "Artista desconocido"),
-            album = json.optString("album", "Álbum desconocido"),
+            title = json.optString("title", "Untitled"),
+            artist = json.optString("artist", "Unknown artist"),
+            album = json.optString("album", "Unknown album"),
             albumArtist = json.optString("albumArtist", ""),
             durationMs = json.optLong("durationMs", 0L),
             albumId = json.optLong("albumId", 0L),

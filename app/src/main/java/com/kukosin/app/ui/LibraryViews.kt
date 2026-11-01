@@ -224,12 +224,12 @@ internal fun SearchField(
             .fillMaxWidth()
             .padding(horizontal = 24.dp, vertical = 8.dp)
             .focusRequester(focusRequester),
-        placeholder = { Text("Buscar canción, artista, álbum o formato") },
+        placeholder = { Text("Search song, artist, album or format") },
         leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = CreamMuted) },
         trailingIcon = if (query.isNotEmpty()) {
             {
                 IconButton(onClick = { onQueryChange("") }) {
-                    Icon(Icons.Rounded.Close, contentDescription = "Limpiar la búsqueda", tint = CreamMuted)
+                    Icon(Icons.Rounded.Close, contentDescription = "Clear search", tint = CreamMuted)
                 }
             }
         } else {
@@ -270,14 +270,14 @@ internal fun YtmView(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp, vertical = 8.dp),
-            placeholder = { Text("Buscar en YouTube Music Online...") },
+            placeholder = { Text("Search YouTube Music Online...") },
             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = Gold) },
             trailingIcon = {
                 if (isSearching) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Gold, strokeWidth = 2.dp)
                 } else {
                     IconButton(onClick = onSearch) {
-                        Icon(Icons.Rounded.Search, contentDescription = "Buscar", tint = Gold)
+                        Icon(Icons.Rounded.Search, contentDescription = "Search", tint = Gold)
                     }
                 }
             },
@@ -320,7 +320,7 @@ internal fun YtmView(
             if (ytmTracks.isEmpty()) {
                 item {
                     Text(
-                        if (isSearching) "Buscando en YouTube Music..." else "Busca una canción, artista o álbum para reproducir desde YouTube Music.",
+                        if (isSearching) "Searching YouTube Music..." else "Search for a song, artist or album to play from YouTube Music.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = CreamMuted,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 24.dp),
@@ -402,7 +402,7 @@ internal fun YtmTrackRow(
         IconButton(onClick = onClick) {
             Icon(
                 if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                contentDescription = if (isPlaying) "Pausar" else "Reproducir",
+                contentDescription = if (isPlaying) "Pause" else "Play",
                 tint = Gold,
                 modifier = Modifier.size(28.dp),
             )
@@ -426,10 +426,10 @@ internal fun PermissionCard(onGrant: () -> Unit) {
             modifier = Modifier.size(56.dp),
         )
         Spacer(Modifier.height(16.dp))
-        Text("Tu música, sin pérdidas", style = MaterialTheme.typography.titleLarge, color = Cream)
+        Text("Your music, lossless", style = MaterialTheme.typography.titleLarge, color = Cream)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Kukosin lee la biblioteca local, decodifica en software de alta resolución y envía audio bit-perfect al DAC USB o a la salida activa.",
+            "Kukosin reads your local library, decodes in high-resolution software and sends bit-perfect audio to the USB DAC or the active output.",
             style = MaterialTheme.typography.bodyMedium,
             color = CreamMuted,
         )
@@ -439,7 +439,7 @@ internal fun PermissionCard(onGrant: () -> Unit) {
             colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
             shape = RoundedCornerShape(16.dp),
         ) {
-            Text("Permitir acceso a audio")
+            Text("Allow audio access")
         }
     }
 }
@@ -450,7 +450,7 @@ internal fun LoadingLibrary() {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             CircularProgressIndicator(color = Gold)
             Spacer(Modifier.height(16.dp))
-            Text("Escaneando la biblioteca…", color = CreamMuted)
+            Text("Scanning the library…", color = CreamMuted)
         }
     }
 }
@@ -459,7 +459,7 @@ internal fun LoadingLibrary() {
 internal fun EmptyLibrary(hasQuery: Boolean) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(
-            text = if (hasQuery) "Nada coincide con la búsqueda" else "No hay archivos de audio indexados",
+            text = if (hasQuery) "Nothing matches your search" else "No audio files indexed",
             color = CreamMuted,
         )
     }
@@ -488,7 +488,7 @@ internal fun TrackList(
     val scope = rememberCoroutineScope()
     var activeLetter by remember { mutableStateOf<Char?>(null) }
 
-    // "Ver en la biblioteca": cuando llega una pista desde el reproductor, la lista
+    // "Show in library": cuando llega una pista desde el reproductor, la lista
     // se desplaza sola hasta ella.
     LaunchedEffect(focusUri, tracks) {
         if (focusUri == null) return@LaunchedEffect
@@ -622,7 +622,7 @@ internal fun TrackRow(
         label = "artworkDragAlpha",
     )
 
-    // "Ver en la biblioteca" desde el reproductor: la fila se enciende en dorado un
+    // "Show in library" desde el reproductor: la fila se enciende en dorado un
     // par de segundos para que la encuentres de un vistazo.
     val highlightAlpha by animateFloatAsState(
         targetValue = if (highlighted) 0.20f else 0f,
@@ -645,7 +645,7 @@ internal fun TrackRow(
             ) {
                 Icon(
                     imageVector = if (isPlayNext) Icons.AutoMirrored.Rounded.PlaylistAdd else Icons.AutoMirrored.Rounded.QueueMusic,
-                    contentDescription = if (isPlayNext) "A continuación" else "+ Cola",
+                    contentDescription = if (isPlayNext) "Up next" else "+ Queue",
                     tint = Gold,
                     modifier = Modifier.size(24.dp),
                 )
@@ -721,7 +721,7 @@ internal fun TrackRow(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (isPlaying) {
-                        Icon(Icons.Rounded.GraphicEq, contentDescription = "Reproduciendo", tint = Gold, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Rounded.GraphicEq, contentDescription = "Playing", tint = Gold, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                     }
                     Text(formatTime(track.durationMs), style = MaterialTheme.typography.labelSmall, color = CreamMuted)
@@ -729,7 +729,7 @@ internal fun TrackRow(
                         IconButton(onClick = { showMenu = true }) {
                             Icon(
                                 Icons.Rounded.MoreVert,
-                                contentDescription = "Opciones",
+                                contentDescription = "Options",
                                 tint = CreamMuted.copy(alpha = 0.8f),
                                 modifier = Modifier.size(20.dp),
                             )
@@ -835,7 +835,7 @@ internal fun AlbumCard(album: AlbumGroup, onClick: () -> Unit) {
             overflow = TextOverflow.Ellipsis,
         )
         Text(
-            "${album.tracks.size} canciones${if (album.year > 0) " · ${album.year}" else ""}",
+            "${album.tracks.size} songs${if (album.year > 0) " · ${album.year}" else ""}",
             style = MaterialTheme.typography.labelSmall,
             color = Gold,
         )
@@ -888,7 +888,7 @@ internal fun ArtistRow(artist: ArtistGroup, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(artist.name, style = MaterialTheme.typography.titleMedium, color = Cream, fontWeight = FontWeight.Bold)
             Text(
-                "${artist.albumCount} álbumes · ${artist.trackCount} canciones",
+                "${artist.albumCount} albums · ${artist.trackCount} songs",
                 style = MaterialTheme.typography.bodyMedium,
                 color = CreamMuted,
             )
@@ -926,7 +926,7 @@ internal fun FolderBrowserView(
         ) {
             if (folderPath.size > 1) {
                 IconButton(onClick = onNavigateUp) {
-                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Atrás", tint = Gold)
+                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Gold)
                 }
             } else {
                 Icon(Icons.Rounded.Folder, contentDescription = null, tint = Gold, modifier = Modifier.padding(8.dp))
@@ -981,7 +981,7 @@ internal fun FolderRow(folder: FolderNode, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(folder.name, style = MaterialTheme.typography.titleMedium, color = Cream, fontWeight = FontWeight.Bold)
             Text(
-                "${folder.totalTracksCount} canciones",
+                "${folder.totalTracksCount} songs",
                 style = MaterialTheme.typography.bodyMedium,
                 color = CreamMuted,
             )

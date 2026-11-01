@@ -76,28 +76,28 @@ internal object EmbeddedMetadata {
         runCatching {
             retriever.setDataSource(context, uri)
             val keys = buildList {
-                add(MediaMetadataRetriever.METADATA_KEY_TITLE to "Título (MMR)")
-                add(MediaMetadataRetriever.METADATA_KEY_ARTIST to "Artista (MMR)")
-                add(MediaMetadataRetriever.METADATA_KEY_ALBUM to "Álbum (MMR)")
+                add(MediaMetadataRetriever.METADATA_KEY_TITLE to "Title (MMR)")
+                add(MediaMetadataRetriever.METADATA_KEY_ARTIST to "Artist (MMR)")
+                add(MediaMetadataRetriever.METADATA_KEY_ALBUM to "Album (MMR)")
                 add(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST to "Album Artist")
-                add(MediaMetadataRetriever.METADATA_KEY_AUTHOR to "Autor")
-                add(MediaMetadataRetriever.METADATA_KEY_COMPOSER to "Compositor (MMR)")
-                add(MediaMetadataRetriever.METADATA_KEY_WRITER to "Escritor")
-                add(MediaMetadataRetriever.METADATA_KEY_GENRE to "Género (MMR)")
-                add(MediaMetadataRetriever.METADATA_KEY_DATE to "Fecha")
-                add(MediaMetadataRetriever.METADATA_KEY_YEAR to "Año (MMR)")
-                add(MediaMetadataRetriever.METADATA_KEY_DURATION to "Duración ms (MMR)")
+                add(MediaMetadataRetriever.METADATA_KEY_AUTHOR to "Author")
+                add(MediaMetadataRetriever.METADATA_KEY_COMPOSER to "Composer (MMR)")
+                add(MediaMetadataRetriever.METADATA_KEY_WRITER to "Writer")
+                add(MediaMetadataRetriever.METADATA_KEY_GENRE to "Genre (MMR)")
+                add(MediaMetadataRetriever.METADATA_KEY_DATE to "Date")
+                add(MediaMetadataRetriever.METADATA_KEY_YEAR to "Year (MMR)")
+                add(MediaMetadataRetriever.METADATA_KEY_DURATION to "Duration ms (MMR)")
                 add(MediaMetadataRetriever.METADATA_KEY_MIMETYPE to "MIME (MMR)")
                 add(MediaMetadataRetriever.METADATA_KEY_BITRATE to "Bitrate (MMR)")
-                add(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER to "Pista")
-                add(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER to "Disco")
-                add(MediaMetadataRetriever.METADATA_KEY_COMPILATION to "Compilación")
-                add(MediaMetadataRetriever.METADATA_KEY_NUM_TRACKS to "Pistas del medio")
-                add(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO to "Tiene audio")
-                add(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO to "Tiene vídeo")
+                add(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER to "Track")
+                add(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER to "Disc")
+                add(MediaMetadataRetriever.METADATA_KEY_COMPILATION to "Compilation")
+                add(MediaMetadataRetriever.METADATA_KEY_NUM_TRACKS to "Media tracks")
+                add(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO to "Has audio")
+                add(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO to "Has video")
                 if (Build.VERSION.SDK_INT >= 31) {
                     add(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE to "Sample rate (MMR)")
-                    add(MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE to "Bits por muestra (MMR)")
+                    add(MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE to "Bits per sample (MMR)")
                 }
             }
             keys.forEach { (key, label) ->
@@ -137,24 +137,24 @@ internal object EmbeddedMetadata {
             when (id) {
                 "USLT", "ULT" -> lyrics = lyrics ?: parseUslt(body, "ID3 USLT")
                 "SYLT", "SLT" -> lyrics = mergeSylt(lyrics, body)
-                "COMM" -> putComment(fields, "Comentario ID3", body)
+                "COMM" -> putComment(fields, "ID3 comment", body)
                 "TENC" -> fields.putIfAbsent("Encoder", decodeTextFrame(body))
-                "TSSE" -> fields.putIfAbsent("Ajustes encoder", decodeTextFrame(body))
-                "TIT2" -> fields.putIfAbsent("Título ID3", decodeTextFrame(body))
-                "TPE1" -> fields.putIfAbsent("Artista ID3", decodeTextFrame(body))
+                "TSSE" -> fields.putIfAbsent("Encoder settings", decodeTextFrame(body))
+                "TIT2" -> fields.putIfAbsent("ID3 title", decodeTextFrame(body))
+                "TPE1" -> fields.putIfAbsent("ID3 artist", decodeTextFrame(body))
                 "TPE2" -> fields.putIfAbsent("Album Artist ID3", decodeTextFrame(body))
-                "TALB" -> fields.putIfAbsent("Álbum ID3", decodeTextFrame(body))
-                "TCON" -> fields.putIfAbsent("Género ID3", decodeTextFrame(body))
-                "TYER", "TDRC" -> fields.putIfAbsent("Fecha ID3", decodeTextFrame(body))
-                "TRCK" -> fields.putIfAbsent("Pista ID3", decodeTextFrame(body))
-                "TPOS" -> fields.putIfAbsent("Disco ID3", decodeTextFrame(body))
-                "TCOM" -> fields.putIfAbsent("Compositor ID3", decodeTextFrame(body))
-                "TPUB" -> fields.putIfAbsent("Sello", decodeTextFrame(body))
+                "TALB" -> fields.putIfAbsent("ID3 album", decodeTextFrame(body))
+                "TCON" -> fields.putIfAbsent("ID3 genre", decodeTextFrame(body))
+                "TYER", "TDRC" -> fields.putIfAbsent("ID3 date", decodeTextFrame(body))
+                "TRCK" -> fields.putIfAbsent("ID3 track", decodeTextFrame(body))
+                "TPOS" -> fields.putIfAbsent("ID3 disc", decodeTextFrame(body))
+                "TCOM" -> fields.putIfAbsent("ID3 composer", decodeTextFrame(body))
+                "TPUB" -> fields.putIfAbsent("Label", decodeTextFrame(body))
                 "TSRC" -> fields.putIfAbsent("ISRC", decodeTextFrame(body))
                 "TBPM" -> fields.putIfAbsent("BPM", decodeTextFrame(body))
-                "TKEY" -> fields.putIfAbsent("Tonalidad / Key", decodeTextFrame(body))
+                "TKEY" -> fields.putIfAbsent("Key", decodeTextFrame(body))
                 "TCOP" -> fields.putIfAbsent("Copyright", decodeTextFrame(body))
-                "TLEN" -> fields.putIfAbsent("Duración tag ms", decodeTextFrame(body))
+                "TLEN" -> fields.putIfAbsent("Tag duration ms", decodeTextFrame(body))
                 "TXXX" -> parseTxxx(body, fields)
             }
             pos += 10 + frameSize
@@ -170,14 +170,14 @@ internal object EmbeddedMetadata {
             val key = parts[0].trim().uppercase()
             val valStr = parts[1].trim()
             val label = when (key) {
-                "REPLAYGAIN_TRACK_GAIN" -> "ReplayGain Pista"
-                "REPLAYGAIN_TRACK_PEAK" -> "ReplayGain Pico Pista"
-                "REPLAYGAIN_ALBUM_GAIN" -> "ReplayGain Álbum"
-                "REPLAYGAIN_ALBUM_PEAK" -> "ReplayGain Pico Álbum"
-                "BARCODE", "UPC", "EAN" -> "Código de Barras / UPC"
-                "CATALOGNUMBER" -> "Número Catalogación"
-                "LABEL" -> "Sello Discográfico"
-                "MQAENCODER" -> "Codificador MQA"
+                "REPLAYGAIN_TRACK_GAIN" -> "ReplayGain Track"
+                "REPLAYGAIN_TRACK_PEAK" -> "ReplayGain Track Peak"
+                "REPLAYGAIN_ALBUM_GAIN" -> "ReplayGain Album"
+                "REPLAYGAIN_ALBUM_PEAK" -> "ReplayGain Album Peak"
+                "BARCODE", "UPC", "EAN" -> "Barcode / UPC"
+                "CATALOGNUMBER" -> "Catalog Number"
+                "LABEL" -> "Record Label"
+                "MQAENCODER" -> "MQA encoder"
                 else -> "TXXX ($key)"
             }
             fields.putIfAbsent(label, valStr)
@@ -230,7 +230,7 @@ internal object EmbeddedMetadata {
         val channels = (((packed shr 9) and 7).toInt()) + 1
         val bits = (((packed shr 4) and 31).toInt()) + 1
         fields["FLAC sample rate"] = "$sampleRate Hz"
-        fields["FLAC canales"] = channels.toString()
+        fields["FLAC channels"] = channels.toString()
         fields["FLAC bits"] = "$bits-bit"
     }
 
@@ -275,9 +275,9 @@ internal object EmbeddedMetadata {
                     lyrics = mergePlain(lyrics, toLyrics(value, "$source $key"))
                 "ENCODER", "VENDOR" -> fields.putIfAbsent("Encoder", value)
                 "ISRC" -> fields.putIfAbsent("ISRC", value)
-                "REPLAYGAIN_TRACK_GAIN" -> fields.putIfAbsent("ReplayGain pista", value)
-                "REPLAYGAIN_ALBUM_GAIN" -> fields.putIfAbsent("ReplayGain álbum", value)
-                "DATE", "YEAR" -> fields.putIfAbsent("Fecha tag", value)
+                "REPLAYGAIN_TRACK_GAIN" -> fields.putIfAbsent("ReplayGain track", value)
+                "REPLAYGAIN_ALBUM_GAIN" -> fields.putIfAbsent("ReplayGain album", value)
+                "DATE", "YEAR" -> fields.putIfAbsent("Tag date", value)
                 "TITLE", "ARTIST", "ALBUM", "GENRE", "COMPOSER", "ALBUMARTIST", "TRACKNUMBER", "DISCNUMBER" ->
                     fields.putIfAbsent(key.lowercase().replaceFirstChar { it.titlecase() }, value)
                 else -> fields.putIfAbsent(key.lowercase(), value)
@@ -303,7 +303,7 @@ internal object EmbeddedMetadata {
         val payload = data.copyOfRange(start, end)
         val text = decodeMaybeUtf16(payload).trim()
         if (text.isBlank()) return null
-        fields["Letras MP4"] = "Embebidas (${text.length} caracteres)"
+        fields["MP4 lyrics"] = "Embedded (${text.length} characters)"
         return toLyrics(text, "MP4 ©lyr")
     }
 

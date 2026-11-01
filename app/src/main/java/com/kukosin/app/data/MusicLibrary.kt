@@ -95,7 +95,7 @@ object MusicLibrary {
         return probed
     }
 
-    /** "Volver a escanear": tira la caché en memoria y en disco. */
+    /** "Rescan": tira la caché en memoria y en disco. */
     fun invalidateProbeCache(context: Context?) {
         probeCache.clear()
         cacheLoaded = false
@@ -112,20 +112,20 @@ object MusicLibrary {
         }
 
         val rootPath = "/storage/emulated/0"
-        val root = MutableFolder("Almacenamiento interno", rootPath)
+        val root = MutableFolder("Internal storage", rootPath)
         tracks.forEach { track ->
             val path = track.filePath.takeIf { it.isNotBlank() }?.let { File(it).parent }
             if (path.isNullOrBlank()) {
-                val unknown = root.children.getOrPut("<sin-ruta>") {
-                    MutableFolder("Ubicación desconocida", "<sin-ruta>")
+                val unknown = root.children.getOrPut("<no-path>") {
+                    MutableFolder("Unknown location", "<no-path>")
                 }
                 unknown.tracks.add(track)
                 return@forEach
             }
 
             val internal = path == rootPath || path.startsWith("$rootPath/")
-            var folder = if (internal) root else root.children.getOrPut("<otros>") {
-                MutableFolder("Otras ubicaciones", "<otros>")
+            var folder = if (internal) root else root.children.getOrPut("<other>") {
+                MutableFolder("Other locations", "<other>")
             }
             val parts = (if (internal) path.removePrefix(rootPath) else path)
                 .split('/').filter { it.isNotBlank() }
@@ -151,7 +151,7 @@ object MusicLibrary {
     }
 
     fun groupAlbums(tracks: List<Track>): List<AlbumGroup> {
-        return tracks.groupBy { it.album.ifBlank { "Álbum desconocido" } to it.effectiveAlbumArtist }
+        return tracks.groupBy { it.album.ifBlank { "Unknown album" } to it.effectiveAlbumArtist }
             .map { (albumKey, albumTracks) ->
                 val albumName = albumKey.first
                 val first = albumTracks.first()
@@ -195,57 +195,57 @@ object MusicLibrary {
                 )
             }
             .sortedWith(
-                compareBy<ArtistGroup> { it.name == "Artista desconocido" }
+                compareBy<ArtistGroup> { it.name == "Unknown artist" }
                     .thenBy { it.name.lowercase() },
             )
     }
 
     fun groupGenres(tracks: List<Track>): List<TagCategoryGroup> {
-        return tracks.groupBy { it.genre.trim().ifBlank { "Sin género" } }
+        return tracks.groupBy { it.genre.trim().ifBlank { "No genre" } }
             .map { (genreName, genreTracks) ->
                 val sorted = genreTracks.sortedBy { it.title.lowercase() }
                 val totalMin = (sorted.sumOf { it.durationMs } / 60_000L).coerceAtLeast(1L)
                 TagCategoryGroup(
                     name = genreName,
-                    subtitle = "${sorted.size} canciones · $totalMin min",
+                    subtitle = "${sorted.size} songs · $totalMin min",
                     tracks = sorted,
                 )
             }
             .sortedWith(
-                compareBy<TagCategoryGroup> { it.name == "Sin género" }
+                compareBy<TagCategoryGroup> { it.name == "No genre" }
                     .thenBy { it.name.lowercase() },
             )
     }
 
     fun groupYears(tracks: List<Track>): List<TagCategoryGroup> {
-        return tracks.groupBy { if (it.year > 0) it.year.toString() else "Año desconocido" }
+        return tracks.groupBy { if (it.year > 0) it.year.toString() else "Unknown year" }
             .map { (yearLabel, yearTracks) ->
                 val sorted = yearTracks.sortedBy { it.title.lowercase() }
                 val albumCount = sorted.map { it.album.lowercase() }.distinct().size
                 TagCategoryGroup(
                     name = yearLabel,
-                    subtitle = "$albumCount álbumes · ${sorted.size} canciones",
+                    subtitle = "$albumCount albums · ${sorted.size} songs",
                     tracks = sorted,
                 )
             }
             .sortedWith(
-                compareBy<TagCategoryGroup> { it.name == "Año desconocido" }
+                compareBy<TagCategoryGroup> { it.name == "Unknown year" }
                     .thenByDescending { it.name.toIntOrNull() ?: 0 },
             )
     }
 
     fun groupComposers(tracks: List<Track>): List<TagCategoryGroup> {
-        return tracks.groupBy { it.composer.trim().ifBlank { "Compositor desconocido" } }
+        return tracks.groupBy { it.composer.trim().ifBlank { "Unknown composer" } }
             .map { (composerName, composerTracks) ->
                 val sorted = composerTracks.sortedBy { it.title.lowercase() }
                 TagCategoryGroup(
                     name = composerName,
-                    subtitle = "${sorted.size} canciones",
+                    subtitle = "${sorted.size} songs",
                     tracks = sorted,
                 )
             }
             .sortedWith(
-                compareBy<TagCategoryGroup> { it.name == "Compositor desconocido" }
+                compareBy<TagCategoryGroup> { it.name == "Unknown composer" }
                     .thenBy { it.name.lowercase() },
             )
     }
@@ -377,7 +377,7 @@ object MusicLibrary {
         if (!isMusic(fileName, mime, duration)) return null
         
         val title = cursor.stringOrEmpty(MediaStore.MediaColumns.TITLE)
-            .ifBlank { fileName.substringBeforeLast('.').ifBlank { "Sin título" } }
+            .ifBlank { fileName.substringBeforeLast('.').ifBlank { "Untitled" } }
             
         val rawTrack = cursor.intOrZero(MediaStore.Audio.Media.TRACK)
         val trackNum = if (rawTrack >= 1000) rawTrack % 1000 else rawTrack
@@ -392,9 +392,9 @@ object MusicLibrary {
             title = title,
             artist = cursor.stringOrEmpty(MediaStore.Audio.Media.ARTIST)
                 .takeIf { it.isNotBlank() && it != "<unknown>" }
-                ?: "Artista desconocido",
+                ?: "Unknown artist",
             album = cursor.stringOrEmpty(MediaStore.Audio.Media.ALBUM)
-                .ifBlank { "Álbum desconocido" },
+                .ifBlank { "Unknown album" },
             albumArtist = cursor.stringOrEmpty("album_artist"),
             durationMs = duration,
             albumId = cursor.longOrNull(MediaStore.Audio.Media.ALBUM_ID) ?: 0L,

@@ -88,7 +88,7 @@ object YtmService {
     private val THUMBNAIL_SIZE = Regex("=w\\d+-h\\d+")
     private val THUMBNAIL_SQUARE = Regex("=s\\d+")
 
-    /** Esquema de las URIs "simbólicas" de YTM: el audio real se resuelve al abrir el stream. */
+    /** Esquema de las URIs "symbolic" de YTM: el audio real se resuelve al abrir el stream. */
     const val STREAM_SCHEME = "kukosin-ytm"
 
     // Contrato de extras de MediaMetadata para audio remoto (lo lee PlayerApp).
@@ -131,9 +131,9 @@ object YtmService {
                 .take(SEARCH_LIMIT)
                 .toList()
         }.onSuccess { results ->
-            Log.d(TAG, "search \"$needle\": ${results.size} resultados en ${System.currentTimeMillis() - startedAt} ms")
+            Log.d(TAG, "search \"$needle\": ${results.size} results in ${System.currentTimeMillis() - startedAt} ms")
         }.onFailure { throwable ->
-            Log.w(TAG, "search \"$needle\" falló: ${throwable::class.java.simpleName}: ${throwable.message}")
+            Log.w(TAG, "search \"$needle\" failed: ${throwable::class.java.simpleName}: ${throwable.message}")
         }.getOrElse { throwable ->
             throw YtmException(describeYtmError(throwable), throwable)
         }
@@ -152,7 +152,7 @@ object YtmService {
     ): YtmAudio = withContext(Dispatchers.IO) {
         audioCache[videoId]?.let { cached ->
             if (cached.expiresAt > System.currentTimeMillis()) {
-                Log.d(TAG, "resolveAudio($videoId): URL desde caché")
+                Log.d(TAG, "resolveAudio($videoId): URL from cache")
                 return@withContext cached.audio
             }
             audioCache.remove(videoId)
@@ -171,9 +171,9 @@ object YtmService {
 
         val stream = pickBestAudio(streamInfo.audioStreams)
             ?: throw YtmException(
-                "YouTube no entregó ninguna pista de audio para esta canción. " +
-                    "Puede ser contenido con restricción o la extracción quedó desactualizada " +
-                    "(actualiza NewPipeExtractor en gradle/libs.versions.toml).",
+                "YouTube did not return an audio track for this song. " +
+                    "It may be restricted content or the extractor is outdated " +
+                    "(update NewPipeExtractor in gradle/libs.versions.toml).",
             )
 
         val audio = YtmAudio(
@@ -187,7 +187,7 @@ object YtmService {
         Log.d(
             TAG,
             "resolveAudio($videoId): ${audio.codecLabel} ${audio.bitrateKbps}kbps " +
-                "itag=${audio.itag} en ${System.currentTimeMillis() - startedAt} ms",
+                "itag=${audio.itag} in ${System.currentTimeMillis() - startedAt} ms",
         )
         audioCache[videoId] = CachedAudio(audio, System.currentTimeMillis() + STREAM_CACHE_TTL_MS)
         trimCache()
@@ -287,8 +287,8 @@ object YtmService {
 
         return YtmTrack(
             id = videoId,
-            title = name.ifBlank { "Canción de YouTube Music" },
-            artist = uploaderName.ifBlank { "Artista desconocido" },
+            title = name.ifBlank { "YouTube Music song" },
+            artist = uploaderName.ifBlank { "Unknown artist" },
             thumbnailUri = upscaleThumbnailUrl(thumbnail),
             durationMs = duration.coerceAtLeast(0L) * 1000L,
         )
@@ -341,23 +341,23 @@ object YtmService {
 
 /** Traduce las excepciones de NewPipeExtractor a algo que el usuario pueda entender. */
 fun describeYtmError(error: Throwable): String = when (error) {
-    is YtmException -> error.message ?: "No se pudo completar la operación en YouTube Music."
+    is YtmException -> error.message ?: "Could not complete the operation on YouTube Music."
     is SignInConfirmNotBotException, is ReCaptchaException ->
-        "YouTube pidió una verificación anti-bot. Espera un minuto y vuelve a intentar."
+        "YouTube requested an anti-bot check. Wait a minute and try again."
     is AgeRestrictedContentException ->
-        "Ese contenido tiene restricción de edad y YouTube no lo entrega sin una cuenta."
+        "That content has an age restriction and YouTube will not deliver it without an account."
     is YoutubeMusicPremiumContentException ->
-        "Es contenido exclusivo de YouTube Music Premium."
+        "It is YouTube Music Premium exclusive content."
     is GeographicRestrictionException ->
-        "El contenido está bloqueado en tu región."
+        "The content is blocked in your region."
     is PrivateContentException ->
-        "El contenido es privado."
+        "The content is private."
     is ContentNotSupportedException ->
-        "Formato de contenido no soportado por el extractor."
+        "Content format not supported by the extractor."
     is ContentNotAvailableException ->
-        "YouTube no tiene ese contenido disponible."
+        "YouTube does not have that content available."
     is IOException ->
-        "Sin conexión con YouTube. Revisa tu red e intenta de nuevo."
+        "No connection to YouTube. Check your network and try again."
     else ->
-        "Error de YouTube Music: ${error.message ?: error::class.java.simpleName}"
+        "YouTube Music error: ${error.message ?: error::class.java.simpleName}"
 }
