@@ -37,6 +37,13 @@ object EqManager {
     private val _clipping = MutableStateFlow(false)
     val clipping: StateFlow<Boolean> = _clipping.asStateFlow()
 
+    /** Perfil activo (altavoz / auriculares / DAC USB). */
+    private val _profile = MutableStateFlow(EqProfile.WIRED)
+    val profile: StateFlow<EqProfile> = _profile.asStateFlow()
+
+    /** Estado de cada perfil ya tocado en esta sesión (se persiste por separado). */
+    private val profileCache = HashMap<EqProfile, EqSettings>()
+
     @Volatile
     private var peakAccum = 0f
 
@@ -50,7 +57,9 @@ object EqManager {
     fun init(context: Context) {
         if (prefs != null) return
         prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val loaded = load()
+        migrateLegacyIfNeeded()
+        val loaded = load(_profile.value)
+        profileCache[_profile.value] = loaded
         snapshot = loaded
         _settings.value = loaded
     }
@@ -64,7 +73,8 @@ object EqManager {
         next.effectivePreampDb
         snapshot = next
         _settings.value = next
-        persist(next)
+        profileCache[_profile.value] = next
+        persist(_profile.value, next)
     }
 
     fun setEnabled(enabled: Boolean) = update { it.copy(enabled = enabled) }
@@ -81,6 +91,25 @@ object EqManager {
     fun setBandFrequency(index: Int, hz: Float) = update { it.withBandFrequency(index, hz) }
 
     fun setBandQ(index: Int, q: Float) = update { it.withBandQ(index, q) }
+
+    fun setBandType(index: Int, type: EqBandType) = update { it.withBandType(index, type) }
+
+    /**
+     * Cambia el perfil activo. Lo llama la app cuando cambia la salida (altavoz,
+     * jack, DAC USB). No toca el hilo de audio más que la referencia [snapshot].
+     */
+    @Synchronized
+    fun setProfile(profile: EqProfile) {
+        if (profile == _profile.value) return
+        profileCache[_profile.value] = _settings.value
+        _profile.value = profile
+        val next = profileCache[profile] ?: load(profile)
+        profileCache[profile] = next
+        snapshot = next
+        _settings.value = next
+        // El pico de la curva se calcula acá, en el hilo de UI.
+        next.effectivePreampDb
+    }
 
     fun applyPreset(name: String) {
         val preset = EqPresets.byName(name) ?: return
@@ -122,35 +151,68 @@ object EqManager {
 
     // ------------------------------------------------------------ persistencia
 
-    private fun load(): EqSettings {
+    private fun prefix(profile: EqProfile) = "${profile.name.lowercase()}_"
+
+    private fun load(profile: EqProfile): EqSettings {
         val p = prefs ?: return EqSettings()
+        val pre = prefix(profile)
         val bands = DefaultEqBands.mapIndexed { i, band ->
             band.copy(
-                freqHz = p.getFloat("freq_$i", band.freqHz),
-                gainDb = p.getFloat("gain_$i", band.gainDb),
-                q = p.getFloat("q_$i", band.q),
+                freqHz = p.getFloat("${pre}freq_$i", band.freqHz),
+                gainDb = p.getFloat("${pre}gain_$i", band.gainDb),
+                q = p.getFloat("${pre}q_$i", band.q),
+                type = runCatching {
+                    EqBandType.valueOf(
+                        p.getString("${pre}type_$i", band.type.name) ?: band.type.name,
+                    )
+                }.getOrDefault(band.type),
             )
         }
         return EqSettings(
-            enabled = p.getBoolean(KEY_ENABLED, false),
-            preampDb = p.getFloat(KEY_PREAMP, 0f),
-            autoHeadroom = p.getBoolean(KEY_AUTO_HEADROOM, true),
-            presetName = p.getString(KEY_PRESET, EqPresets.default.name) ?: EqPresets.default.name,
+            enabled = p.getBoolean("${pre}$KEY_ENABLED", false),
+            preampDb = p.getFloat("${pre}$KEY_PREAMP", 0f),
+            autoHeadroom = p.getBoolean("${pre}$KEY_AUTO_HEADROOM", true),
+            presetName = p.getString("${pre}$KEY_PRESET", EqPresets.default.name) ?: EqPresets.default.name,
             bands = bands,
         )
     }
 
-    private fun persist(settings: EqSettings) {
+    private fun persist(profile: EqProfile, settings: EqSettings) {
         val p = prefs ?: return
+        val pre = prefix(profile)
         p.edit().apply {
-            putBoolean(KEY_ENABLED, settings.enabled)
-            putFloat(KEY_PREAMP, settings.preampDb)
-            putBoolean(KEY_AUTO_HEADROOM, settings.autoHeadroom)
-            putString(KEY_PRESET, settings.presetName)
+            putBoolean("${pre}$KEY_ENABLED", settings.enabled)
+            putFloat("${pre}$KEY_PREAMP", settings.preampDb)
+            putBoolean("${pre}$KEY_AUTO_HEADROOM", settings.autoHeadroom)
+            putString("${pre}$KEY_PRESET", settings.presetName)
             settings.bands.forEachIndexed { i, band ->
-                putFloat("freq_$i", band.freqHz)
-                putFloat("gain_$i", band.gainDb)
-                putFloat("q_$i", band.q)
+                putFloat("${pre}freq_$i", band.freqHz)
+                putFloat("${pre}gain_$i", band.gainDb)
+                putFloat("${pre}q_$i", band.q)
+                putString("${pre}type_$i", band.type.name)
+            }
+        }.apply()
+    }
+
+    /**
+     * Copia los ajustes del formato viejo (una sola curva para todo) al perfil de
+     * auriculares, una única vez. Así nadie pierde lo que ya había configurado.
+     */
+    private fun migrateLegacyIfNeeded() {
+        val p = prefs ?: return
+        if (!p.contains(KEY_ENABLED)) return
+        if (p.contains("${prefix(EqProfile.WIRED)}$KEY_ENABLED")) return
+        val pre = prefix(EqProfile.WIRED)
+        p.edit().apply {
+            putBoolean("${pre}$KEY_ENABLED", p.getBoolean(KEY_ENABLED, false))
+            putFloat("${pre}$KEY_PREAMP", p.getFloat(KEY_PREAMP, 0f))
+            putBoolean("${pre}$KEY_AUTO_HEADROOM", p.getBoolean(KEY_AUTO_HEADROOM, true))
+            putString("${pre}$KEY_PRESET", p.getString(KEY_PRESET, EqPresets.default.name))
+            for (i in DefaultEqBands.indices) {
+                putFloat("${pre}freq_$i", p.getFloat("freq_$i", DefaultEqBands[i].freqHz))
+                putFloat("${pre}gain_$i", p.getFloat("gain_$i", DefaultEqBands[i].gainDb))
+                putFloat("${pre}q_$i", p.getFloat("q_$i", DefaultEqBands[i].q))
+                putString("${pre}type_$i", DefaultEqBands[i].type.name)
             }
         }.apply()
     }

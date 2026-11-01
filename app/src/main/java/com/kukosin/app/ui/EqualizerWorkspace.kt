@@ -103,6 +103,7 @@ internal fun EqualizerWorkspace(
     modifier: Modifier = Modifier,
 ) {
     val settings by EqManager.settings.collectAsState()
+    val activeProfile by EqManager.profile.collectAsState()
     val meter by EqManager.meter.collectAsState()
     val clipping by EqManager.clipping.collectAsState()
     var selectedBand by remember { mutableIntStateOf(2) }
@@ -161,7 +162,7 @@ internal fun EqualizerWorkspace(
                             color = Gold,
                         )
                         Text(
-                            "10 bandas · Q constante · 64-bit",
+                            "10 bandas · Q constante · 64-bit · ${activeProfile.label}",
                             style = MaterialTheme.typography.labelSmall,
                             color = CreamMuted,
                         )
@@ -549,6 +550,10 @@ private fun BandEditor(
             )
 
             if (showAdvanced) {
+                BandTypeSelector(
+                    current = band.type,
+                    onSelect = { EqManager.setBandType(index, it) },
+                )
                 EqSlider(
                     value = log10(band.freqHz),
                     min = log10(EqSettings.MIN_FREQ_HZ),
@@ -794,4 +799,44 @@ private fun gainForY(y: Float, height: Float): Float {
     if (height <= 0f) return 0f
     val db = ((height / 2f - y) / (height / 2f)) * DISPLAY_DB
     return db.coerceIn(-EqSettings.MAX_GAIN_DB, EqSettings.MAX_GAIN_DB)
+}
+
+/**
+ * Tipo de filtro de la banda: campana (Q constante) o shelf en los extremos.
+ *
+ * Los presets y el ecualizador de fábrica usan shelf en 31 Hz y 16 kHz porque ahí es
+ * donde suena natural; con esto se puede cambiar a gusto de cada uno.
+ */
+@Composable
+private fun BandTypeSelector(current: EqBandType, onSelect: (EqBandType) -> Unit) {
+    val options = listOf(
+        EqBandType.LOW_SHELF to "Shelf graves",
+        EqBandType.PEAK to "Campana",
+        EqBandType.HIGH_SHELF to "Shelf agudos",
+    )
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        Text(
+            "Tipo de filtro",
+            style = MaterialTheme.typography.labelSmall,
+            color = CreamMuted,
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.forEach { (type, label) ->
+                val selected = type == current
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (selected) Ink else CreamMuted,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                    modifier = Modifier
+                        .background(if (selected) Gold else InkSoft, RoundedCornerShape(10.dp))
+                        .border(1.dp, if (selected) Gold else Cream.copy(alpha = 0.10f), RoundedCornerShape(10.dp))
+                        .clickable { onSelect(type) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+    }
 }

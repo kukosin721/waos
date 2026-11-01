@@ -84,6 +84,19 @@ data class EqSettings(
             presetName = CUSTOM_PRESET,
         )
 
+    fun withBandType(index: Int, type: EqBandType): EqSettings =
+        copy(
+            bands = bands.mapIndexed { i, b ->
+                if (i == index) {
+                    // Un shelf necesita una pendiente suave; una campana, una Q de octava.
+                    b.copy(type = type, q = if (type == EqBandType.PEAK) 1.41f else 0.71f)
+                } else {
+                    b
+                }
+            },
+            presetName = CUSTOM_PRESET,
+        )
+
     fun withBandQ(index: Int, q: Float): EqSettings =
         copy(
             bands = bands.mapIndexed { i, b ->
@@ -156,6 +169,29 @@ fun EqSettings.applyingPreset(preset: EqPresets.Preset): EqSettings = copy(
     },
     presetName = preset.name,
 )
+
+/**
+ * Perfil del ecualizador según el tipo de salida.
+ *
+ * Un auricular, el altavoz del teléfono y un DAC USB no necesitan la misma curva: cada
+ * uno guarda su propio estado (encendido, preamp, bandas y preset) y la app cambia de
+ * perfil sola cuando cambia la salida.
+ */
+enum class EqProfile(val label: String, val hint: String) {
+    BUILTIN("Altavoz", "El altavoz interno nunca suena igual que unos auriculares"),
+    WIRED("Auriculares / línea", "Jack o USB-C sin DAC propio"),
+    USB("DAC USB", "El DAC externo tiene su propia respuesta"),
+    ;
+
+    companion object {
+        /** Clasificación simple y honesta a partir de lo que reporta Android. */
+        fun forDevice(isBuiltin: Boolean, isUsbOrDac: Boolean): EqProfile = when {
+            isUsbOrDac -> USB
+            isBuiltin -> BUILTIN
+            else -> WIRED
+        }
+    }
+}
 
 /** Utilidades de formato para la UI. */
 fun formatFrequency(hz: Float): String = when {

@@ -276,6 +276,17 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
         ?.takeIf { it.scheme == YtmService.STREAM_SCHEME }
         ?.lastPathSegment
     val output by AudioRoute.current.collectAsStateWithLifecycle()
+
+    // El ecualizador tiene una curva por tipo de salida: se cambia solo cuando cambia
+    // la salida (altavoz / jack / DAC USB).
+    LaunchedEffect(output.isBuiltin, output.isUsb, output.isDac) {
+        com.kukosin.app.eq.EqManager.setProfile(
+            com.kukosin.app.eq.EqProfile.forDevice(
+                isBuiltin = output.isBuiltin,
+                isUsbOrDac = output.isUsb || output.isDac,
+            ),
+        )
+    }
     val analysis by viewModel.analysisState.collectAsStateWithLifecycle()
     val audioConfig by viewModel.audioConfig.collectAsStateWithLifecycle()
     var showSettings by remember { mutableStateOf(false) }

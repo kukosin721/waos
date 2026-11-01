@@ -6,6 +6,7 @@ import com.kukosin.app.eq.EqBand
 import com.kukosin.app.eq.EqBandType
 import com.kukosin.app.eq.EqEngine
 import com.kukosin.app.eq.EqPresets
+import com.kukosin.app.eq.EqProfile
 import com.kukosin.app.eq.EqSettings
 import com.kukosin.app.eq.applyingPreset
 import org.junit.Assert.assertEquals
@@ -193,5 +194,41 @@ class EqFilterTest {
         assertEquals(EqSettings.MAX_GAIN_DB, settings.bands[0].gainDb, 0.001f)
         val low = EqSettings(bands = listOf(EqBand(100f, 0f))).withBandGain(0, -40f)
         assertEquals(-EqSettings.MAX_GAIN_DB, low.bands[0].gainDb, 0.001f)
+    }
+    @Test
+    fun changingTheBandTypeAlsoFixesItsQ() {
+        val settings = EqSettings(enabled = true, bands = DefaultEqBands)
+        val shelf = settings.withBandType(4, EqBandType.HIGH_SHELF)
+        assertEquals(EqBandType.HIGH_SHELF, shelf.bands[4].type)
+        assertEquals(0.71f, shelf.bands[4].q, 0.001f)
+        assertEquals(EqSettings.CUSTOM_PRESET, shelf.presetName)
+
+        val peak = shelf.withBandType(4, EqBandType.PEAK)
+        assertEquals(EqBandType.PEAK, peak.bands[4].type)
+        assertEquals(1.41f, peak.bands[4].q, 0.001f)
+        // Cambiar el tipo no toca la ganancia de la banda.
+        assertEquals(0f, peak.bands[4].gainDb, 0.001f)
+    }
+
+    @Test
+    fun profileDependsOnTheOutputType() {
+        assertEquals(EqProfile.BUILTIN, EqProfile.forDevice(isBuiltin = true, isUsbOrDac = false))
+        assertEquals(EqProfile.USB, EqProfile.forDevice(isBuiltin = false, isUsbOrDac = true))
+        // Un altavoz conectado por USB sigue siendo USB: manda el camino, no el parlante.
+        assertEquals(EqProfile.USB, EqProfile.forDevice(isBuiltin = true, isUsbOrDac = true))
+        assertEquals(EqProfile.WIRED, EqProfile.forDevice(isBuiltin = false, isUsbOrDac = false))
+    }
+
+    @Test
+    fun aShelfBandStillCompensatesInTheCurve() {
+        val settings = EqSettings(
+            enabled = true,
+            bands = DefaultEqBands.mapIndexed { i, band ->
+                if (i == 0) band.copy(type = EqBandType.LOW_SHELF, q = 0.71f, gainDb = 5f) else band
+            },
+        )
+        // El pico real de la curva tiene que reflejar el shelf.
+        assertTrue(settings.curvePeakDb >= 4.0f)
+        assertEquals(-settings.curvePeakDb, settings.effectivePreampDb, 0.001f)
     }
 }
