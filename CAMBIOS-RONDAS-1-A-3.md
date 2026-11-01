@@ -260,3 +260,43 @@ alineadas, y los patches aplican limpio en un clon vacío.
   rápidas que en la versión vieja ocupaban su lugar no se agregaron.
 - Perfiles del EQ: quedaron **tres** (altavoz / auriculares / DAC USB) y cambian solos.
   Si querés perfiles manuales con nombre propio, es otro paso.
+
+---
+
+## Cómo compilar esto
+
+La carpeta **`repo/`** *es* el proyecto de Android completo (raíz con `gradlew`,
+`settings.gradle.kts`, `build.gradle.kts` y `app/`). No hay que armar nada:
+
+```bash
+# Opción 1: Android Studio
+#   File → Open → elegí la carpeta repo/  (no app/, no el zip)
+#
+# Opción 2: consola
+cd repo
+./gradlew assembleDebug        # APK de debug
+./gradlew installDebug         # compila e instala en el teléfono conectado
+./gradlew testDebugUnitTest    # los tests JVM (EQ, FFT, orden, audio, gestos)
+```
+
+Datos del proyecto tal como está en esta rama:
+
+| Cosa | Valor |
+|---|---|
+| Gradle | 9.6.0 (wrapper incluido, no hace falta instalarlo) |
+| AGP | 9.4.1 |
+| Kotlin | 2.2.10 · Compose BOM 2026.02.01 |
+| compileSdk / targetSdk | 37 · minSdk 24 |
+| JDK del daemon | 25 (lo baja solo con el toolchain de foojay) |
+
+Android Studio te crea el `local.properties` con la ruta del SDK la primera vez; si
+compilás por consola, acordate de tenerlo (`sdk.dir=/ruta/al/Android/Sdk`).
+
+Si en cambio querés **aplicarlo sobre tu clon** de `feature/ytm-swipe-animado`:
+
+```bash
+git checkout feature/ytm-swipe-animado
+git am /ruta/cambios-rondas-1-a-3.patch      # sólo las rondas 1-3 (sobre el commit del EQ)
+# o, desde la base 9f2b50c, todo de una:
+git apply --binary /ruta/cambios-total-feature.patch
+```
