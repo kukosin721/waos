@@ -45,6 +45,13 @@ data class AudioAnalysis(
 )
 
 object AudioAnalyzer {
+
+    /**
+     * Cantidad de barras del espectro. Antes eran 96: con 288 se distingue el corte
+     * de un MP3 transcodificado sin que el gráfico se vuelva una mancha.
+     */
+    const val SPECTRUM_BANDS = 288
+
     fun extractMetadataOnly(context: Context, track: Track): AudioAnalysis {
         val tags = LinkedHashMap<String, String>()
         val snapshot = runCatching { EmbeddedMetadata.extract(context, track.uri, track.filePath) }.getOrNull()
@@ -162,7 +169,7 @@ object AudioAnalyzer {
         val usedRate = capture.sampleRate.takeIf { it > 0 } ?: sampleRate
         val nyquist = usedRate / 2
         val (spectrumDb, cutoff, slope, hfRatio, peakDb, rmsDb) = measureSpectrum(capture, usedRate)
-        val bars = downsample(spectrumDb, 96, usedRate)
+        val bars = downsample(spectrumDb, SPECTRUM_BANDS, usedRate)
         val dr = (peakDb - rmsDb).coerceAtLeast(0f)
         val padding = capture.lsbPaddingRatio
         val (verdict, title, detail) = classify(

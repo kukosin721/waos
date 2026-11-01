@@ -28,7 +28,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.kukosin.app.data.analysis.AudioAnalysis
@@ -38,6 +43,7 @@ import com.kukosin.app.ui.theme.CreamMuted
 import com.kukosin.app.ui.theme.Gold
 import com.kukosin.app.ui.theme.Ink
 import com.kukosin.app.ui.theme.InkSoft
+import kotlin.math.roundToInt
 
 @Composable
 fun AnalysisPanel(
@@ -191,10 +197,13 @@ fun SpectrumChart(
     cutoffHz: Float,
     nyquistHz: Float,
 ) {
+    val textMeasurer = rememberTextMeasurer()
+    val labelStyle = TextStyle(color = CreamMuted.copy(alpha = 0.75f), fontSize = 9.sp)
+
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
-            .height(150.dp)
+            .height(210.dp)
             .background(Ink, RoundedCornerShape(12.dp))
             .padding(6.dp),
     ) {
@@ -203,17 +212,45 @@ fun SpectrumChart(
         val maxDb = magnitudes.max().coerceAtLeast(-10f)
         val barWidth = size.width / magnitudes.size
 
+        fun yForDb(db: Float): Float =
+            ((db - minDb) / (maxDb - minDb)).coerceIn(0f, 1f) * size.height
+
+        // Rejilla horizontal cada 20 dB.
+        var gridDb = -20f
+        while (gridDb > minDb) {
+            val y = size.height - yForDb(gridDb)
+            drawLine(
+                color = CreamMuted.copy(alpha = 0.08f),
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = 1f,
+            )
+            gridDb -= 20f
+        }
+
+        // Barras: redondeadas y con la opacidad según la intensidad, así los picos se
+        // leen de un vistazo en vez de verse todas iguales.
         magnitudes.forEachIndexed { index, db ->
-            val h = ((db - minDb) / (maxDb - minDb)).coerceIn(0f, 1f) * size.height
-            val color = if (frequencies.getOrNull(index)?.let { it <= cutoffHz } == true) {
-                Gold.copy(alpha = 0.85f)
+            val h = yForDb(db) * size.height
+            if (h <= 0.5f) return@forEachIndexed
+            val below = frequencies.getOrNull(index)?.let { it <= cutoffHz } == true
+            val intensity = ((db - minDb) / (maxDb - minDb)).coerceIn(0f, 1f)
+            val color = if (below) {
+                Gold.copy(alpha = 0.35f + 0.6f * intensity)
             } else {
-                CreamMuted.copy(alpha = 0.35f)
+                CreamMuted.copy(alpha = 0.18f + 0.30f * intensity)
             }
-            drawRect(
+            drawRoundRect(
                 color = color,
                 topLeft = Offset(index * barWidth, size.height - h),
-                size = Size(barWidth * 0.85f, h),
+                size = Size(
+                    (barWidth * 0.72f).coerceAtLeast(1f),
+                    h.coerceAtLeast(1f),
+                ),
+                cornerRadius = CornerRadius(
+                    (barWidth * 0.36f).coerceAtLeast(0.5f),
+                    (barWidth * 0.36f).coerceAtLeast(0.5f),
+                ),
             )
         }
 
@@ -230,6 +267,23 @@ fun SpectrumChart(
         if (nyquistHz > 20000f) {
             val x = xForHz(20000f)
             drawLine(CreamMuted.copy(alpha = 0.5f), Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.5f)
+            val mark = textMeasurer.measure("20 kHz", labelStyle)
+            drawText(mark, topLeft = Offset((x + 3f).coerceAtMost(size.width - mark.size.width), 2f))
+        }
+
+        // Referencias de eje: 0 Hz a la izquierda y Nyquist a la derecha.
+        val zero = textMeasurer.measure("0 Hz", labelStyle)
+        drawText(zero, topLeft = Offset(0f, size.height - zero.size.height - 1f))
+        if (nyquistHz > 0f) {
+            val label = "Nyquist ${(nyquistHz / 1000f).roundToInt()}k"
+            val nyq = textMeasurer.measure(label, labelStyle)
+            drawText(
+                nyq,
+                topLeft = Offset(
+                    (size.width - nyq.size.width).coerceAtLeast(0f),
+                    size.height - nyq.size.height - 1f,
+                ),
+            )
         }
     }
 }

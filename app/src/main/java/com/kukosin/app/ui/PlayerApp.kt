@@ -1302,16 +1302,20 @@ internal fun TrackList(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             itemsIndexed(tracks, key = { _, track -> track.uri.toString() }) { index, track ->
-                TrackRow(
-                    track = track,
-                    selected = track.uri == currentUri,
-                    isPlaying = isPlaying && track.uri == currentUri,
-                    controller = controller,
-                    onClick = { onTrackClick(index) },
-                    onInspect = { onInspectClick(track) },
-                    onMessage = onMessage,
-                    extraLabel = extraLabel?.invoke(track),
-                )
+                // Con animateItem, filtrar o cambiar el orden desplaza las filas en
+                // vez de hacerlas saltar de golpe.
+                Box(modifier = Modifier.animateItem()) {
+                    TrackRow(
+                        track = track,
+                        selected = track.uri == currentUri,
+                        isPlaying = isPlaying && track.uri == currentUri,
+                        controller = controller,
+                        onClick = { onTrackClick(index) },
+                        onInspect = { onInspectClick(track) },
+                        onMessage = onMessage,
+                        extraLabel = extraLabel?.invoke(track),
+                    )
+                }
             }
         }
 
