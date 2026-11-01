@@ -6,33 +6,49 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/**
+ * Ajustes de audio. Ya no hay "driver", ni rate objetivo, ni formato PCM: el motor
+ * siempre abre el DAC con el formato exacto del archivo. Lo único configurable es la
+ * política (estricto o con fallback) y el tamaño de buffer.
+ */
 data class AudioConfig(
-    val driver: String = "AAudio",
-    val targetSampleRate: String = "Auto (Bit-Perfect)",
-    val targetPcmFormat: String = "PCM Float 32-bit",
-    val bitPerfectEnabled: Boolean = true,
+    /** Camino de salida: mezclador, exclusivo integrado, directo o DAC USB. */
+    val outputMode: OutputMode = OutputMode.AAUDIO_EXCLUSIVE,
+    /**
+     * Si está activo, el motor NUNCA convierte: o abre exacto, o falla y avisa.
+     * Apagado (recomendado), intenta bit-perfect primero y sólo si el DAC no lo
+     * acepta pasa a conversión propia.
+     */
+    val strictBitPerfect: Boolean = false,
+    /** Buffer objetivo en milisegundos: más grande = más estable, más latencia. */
+    val bufferMs: Int = 250,
+    /**
+     * Fundidos de 25 ms al arrancar y 60 ms al pausar/detener, más un fundido corto
+     * después de un salto. Evita los clics del motor. Apagado = señal intacta desde
+     * el primer frame (purista).
+     */
+    val fades: Boolean = true,
     val autoAnalyze: Boolean = false,
     val decoder: String = "FFmpeg (Lossless)",
-    val useOboeDirectOutput: Boolean = false,
     val queueCompactMode: Boolean = false,
     val showQueueBadge: Boolean = true,
     val queueShowHistory: Boolean = true,
 ) {
-    val targetSampleRateHz: Int
-        get() = when (targetSampleRate) {
-            "44.1 kHz" -> 44100
-            "48.0 kHz" -> 48000
-            "88.2 kHz" -> 88200
-            "96.0 kHz" -> 96000
-            "176.4 kHz" -> 176400
-            "192.0 kHz" -> 192000
-            "384.0 kHz" -> 384000
-            else -> 0
-        }
+    /**
+     * Sólo lo que obliga a reconstruir el ExoPlayer. Cambiar el aspecto de la cola
+     * no debe cortar la reproducción.
+     */
+    val audioSignature: String
+        get() = "$outputMode|$strictBitPerfect|$bufferMs|$fades|$decoder"
+
+    companion object {
+        val BUFFER_OPTIONS = listOf(100, 250, 500, 1000)
+    }
 }
 
 object AudioSettingsManager {
-    private const val PREFS_NAME = "kukosin_audio_settings"
+    private const val PREFS_NAME = "kukosin_audio_settings_v2"
+
     private var prefs: SharedPreferences? = null
     private val state = MutableStateFlow(AudioConfig())
     val configState: StateFlow<AudioConfig> = state.asStateFlow()
@@ -47,37 +63,37 @@ object AudioSettingsManager {
     private fun load() {
         val p = prefs ?: return
         state.value = AudioConfig(
-            driver = p.getString("driver", "AAudio") ?: "AAudio",
-            targetSampleRate = p.getString("target_sample_rate", "Auto (Bit-Perfect)") ?: "Auto (Bit-Perfect)",
-            targetPcmFormat = p.getString("target_pcm_format", "PCM Float 32-bit") ?: "PCM Float 32-bit",
-            bitPerfectEnabled = p.getBoolean("bit_perfect_enabled", true),
+            outputMode = OutputMode.fromName(p.getString("output_mode", null)),
+            strictBitPerfect = p.getBoolean("strict_bit_perfect", false),
+            bufferMs = p.getInt("buffer_ms", 250).coerceIn(40, 2000),
+            fades = p.getBoolean("fades", true),
             autoAnalyze = p.getBoolean("auto_analyze", false),
             decoder = p.getString("decoder", "FFmpeg (Lossless)") ?: "FFmpeg (Lossless)",
-            useOboeDirectOutput = p.getBoolean("use_oboe_direct_output", false),
             queueCompactMode = p.getBoolean("queue_compact_mode", false),
             showQueueBadge = p.getBoolean("show_queue_badge", true),
             queueShowHistory = p.getBoolean("queue_show_history", true),
         )
     }
 
-    fun setDriver(driver: String) {
-        prefs?.edit()?.putString("driver", driver)?.apply()
-        state.value = state.value.copy(driver = driver)
+    fun setOutputMode(mode: OutputMode) {
+        prefs?.edit()?.putString("output_mode", mode.name)?.apply()
+        state.value = state.value.copy(outputMode = mode)
     }
 
-    fun setTargetSampleRate(rate: String) {
-        prefs?.edit()?.putString("target_sample_rate", rate)?.apply()
-        state.value = state.value.copy(targetSampleRate = rate)
+    fun setStrictBitPerfect(enabled: Boolean) {
+        prefs?.edit()?.putBoolean("strict_bit_perfect", enabled)?.apply()
+        state.value = state.value.copy(strictBitPerfect = enabled)
     }
 
-    fun setTargetPcmFormat(format: String) {
-        prefs?.edit()?.putString("target_pcm_format", format)?.apply()
-        state.value = state.value.copy(targetPcmFormat = format)
+    fun setBufferMs(ms: Int) {
+        val value = ms.coerceIn(40, 2000)
+        prefs?.edit()?.putInt("buffer_ms", value)?.apply()
+        state.value = state.value.copy(bufferMs = value)
     }
 
-    fun setBitPerfectEnabled(enabled: Boolean) {
-        prefs?.edit()?.putBoolean("bit_perfect_enabled", enabled)?.apply()
-        state.value = state.value.copy(bitPerfectEnabled = enabled)
+    fun setFades(enabled: Boolean) {
+        prefs?.edit()?.putBoolean("fades", enabled)?.apply()
+        state.value = state.value.copy(fades = enabled)
     }
 
     fun setAutoAnalyze(enabled: Boolean) {
@@ -88,11 +104,6 @@ object AudioSettingsManager {
     fun setDecoder(decoder: String) {
         prefs?.edit()?.putString("decoder", decoder)?.apply()
         state.value = state.value.copy(decoder = decoder)
-    }
-
-    fun setUseOboeDirectOutput(enabled: Boolean) {
-        prefs?.edit()?.putBoolean("use_oboe_direct_output", enabled)?.apply()
-        state.value = state.value.copy(useOboeDirectOutput = enabled)
     }
 
     fun setQueueCompactMode(compact: Boolean) {

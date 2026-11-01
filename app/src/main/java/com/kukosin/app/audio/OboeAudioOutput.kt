@@ -1,36 +1,46 @@
 package com.kukosin.app.audio
 
 import android.media.AudioDeviceInfo
-import android.os.SystemClock
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.analytics.PlayerId
 import androidx.media3.exoplayer.audio.AudioOutput
-import androidx.media3.exoplayer.audio.AudioOutputProvider.OutputConfig
+import com.kukosin.app.playback.HardwareVolume
+import com.kukosin.app.playback.OutputMode
 import java.nio.ByteBuffer
 import java.util.concurrent.CopyOnWriteArraySet
 
 /**
- * An [AudioOutput] backed by the native Oboe engine. Forwards packed PCM
- * bytes from media3 into the engine ring buffer with no extra conversion.
+ * [AudioOutput] de Media3 servido por el motor de Oboe.
+ *
+ * Todo lo que entra por [write] es PCM ya decodificado (y, si el usuario lo pidió,
+ * ya ecualizado). Acá no se convierte, no se resamplea y no se aplica ganancia
+ * salvo que el volumen esté por debajo de 100 %.
  */
 @UnstableApi
 class OboeAudioOutput(
-    private val config: OutputConfig,
     private val engine: AudioEngine,
+    private val sampleRate: Int,
+    private val mode: OutputMode,
+    private val appContext: android.content.Context?,
 ) : AudioOutput {
 
     private val listeners = CopyOnWriteArraySet<AudioOutput.Listener>()
-    private val sampleRate = if (config.sampleRate > 0) config.sampleRate else 48000
 
-    private var playbackParameters = PlaybackParameters.DEFAULT
     private var started = false
     private var stalled = false
     private var released = false
+    private var volume = 1f
 
     override fun play() {
-        engine.start()
+        val result = engine.start()
+        if (result.isOk) {
+            started = true
+            stalled = false
+            val nowMs = android.os.SystemClock.elapsedRealtime()
+            listeners.forEach { it.onPositionAdvancing(nowMs) }
+        }
     }
 
     override fun pause() {
@@ -43,23 +53,23 @@ class OboeAudioOutput(
         presentationTimeUs: Long,
     ): Boolean {
         val remaining = buffer.remaining()
-        if (remaining == 0) {
-            return true
-        }
+        if (remaining == 0) return true
 
         val accepted = engine.writePacked(buffer).coerceIn(0, remaining)
         buffer.position(buffer.position() + accepted)
-        if (accepted < remaining) {
-            stalled = true
-            return false
-        }
 
-        stalled = false
-        if (!started) {
-            started = true
-            listeners.forEach { it.onPositionAdvancing(SystemClock.elapsedRealtime()) }
+        val complete = accepted == remaining
+        stalled = !complete
+        if (!complete && accepted == 0) {
+            // Si el stream murió (DAC desconectado, HAL que lo retiró), devolver false
+            // dejaría al sink esperando para siempre. Se lanza WriteException y Media3
+            // reporta el error: PlaybackService reconstruye el player en la ruta nueva.
+            val code = engine.errorCode()
+            if (code != 0) {
+                throw AudioOutput.WriteException(code, true)
+            }
         }
-        return true
+        return complete
     }
 
     override fun flush() {
@@ -70,20 +80,29 @@ class OboeAudioOutput(
 
     override fun stop() {
         engine.stop()
+        stalled = false
     }
 
     override fun release() {
-        if (!released) {
-            released = true
-            engine.close()
-            listeners.forEach { it.onReleased() }
-        }
+        if (released) return
+        released = true
+        engine.close()
+        AudioEngineStatus.detach()
+        listeners.forEach { it.onReleased() }
     }
 
     override fun setVolume(volume: Float) {
-        // Bit-perfect path ignores digital gain. Hardware/DAC volume stays at the OS mixer.
-        if (!engine.openedBitPerfect) {
-            engine.setVolume(volume)
+        this.volume = volume
+        when {
+            // DAC USB: volumen fijo, se regula en el DAC. La señal no se toca.
+            mode.locksVolume -> engine.setVolume(1f)
+            // Integrado exclusivo: atenuación digital (bit-perfect sólo al 100 %).
+            mode.usesDigitalVolume -> engine.setVolume(volume)
+            // Controlador directo: el volumen va al hardware, la muestra queda intacta.
+            else -> {
+                engine.setVolume(1f)
+                HardwareVolume.set(appContext, volume)
+            }
         }
     }
 
@@ -93,14 +112,22 @@ class OboeAudioOutput(
 
     override fun getSampleRate(): Int = sampleRate
 
-    override fun getBufferSizeInFrames(): Long = engine.framesPerBurst.toLong()
-
-    override fun getPositionUs(): Long {
-        val rate = engine.actualSampleRate.takeIf { it > 0 } ?: sampleRate
-        return if (rate > 0) engine.positionFrames * C.MICROS_PER_SECOND / rate else 0L
+    override fun getBufferSizeInFrames(): Long {
+        val info = engine.info()
+        val frames = when {
+            info.bufferFrames > 0 -> info.bufferFrames
+            info.framesPerBurst > 0 -> info.framesPerBurst * 4
+            else -> 0
+        }
+        return frames.toLong()
     }
 
-    override fun getPlaybackParameters(): PlaybackParameters = playbackParameters
+    override fun getPositionUs(): Long {
+        if (sampleRate <= 0) return 0L
+        return engine.sourceFramesRendered * C.MICROS_PER_SECOND / sampleRate
+    }
+
+    override fun getPlaybackParameters(): PlaybackParameters = PlaybackParameters.DEFAULT
 
     override fun isStalled(): Boolean = stalled
 
@@ -113,30 +140,20 @@ class OboeAudioOutput(
     }
 
     override fun setPlaybackParameters(playbackParameters: PlaybackParameters) {
-        this.playbackParameters = PlaybackParameters.DEFAULT
+        // Velocidad/pitch rompería el bit-perfect: no se soporta.
     }
 
-    override fun setOffloadDelayPadding(delayInFrames: Int, paddingInFrames: Int) {
-        // Not offloaded.
-    }
+    override fun setOffloadDelayPadding(delayInFrames: Int, paddingInFrames: Int) = Unit
 
-    override fun setOffloadEndOfStream() {
-        // Not offloaded.
-    }
+    override fun setOffloadEndOfStream() = Unit
 
-    override fun setPlayerId(playerId: PlayerId) {
-        // No-op for this output.
-    }
+    override fun setPlayerId(playerId: PlayerId) = Unit
 
-    override fun attachAuxEffect(effectId: Int) {
-        // Effects would modify PCM; rejected on this output.
-    }
+    override fun attachAuxEffect(effectId: Int) = Unit
 
-    override fun setAuxEffectSendLevel(level: Float) {
-        // Not supported by Oboe output.
-    }
+    override fun setAuxEffectSendLevel(level: Float) = Unit
 
     override fun setPreferredDevice(preferredDevice: AudioDeviceInfo?) {
-        // Device is pinned at stream open via AudioRoute.audioDeviceId.
+        // El dispositivo se fija al abrir el stream (AudioRoute → deviceId).
     }
 }

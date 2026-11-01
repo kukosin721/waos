@@ -110,6 +110,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -160,7 +161,10 @@ import com.kukosin.app.data.LibraryInsights
 import com.kukosin.app.data.Track
 import com.kukosin.app.data.formatTime
 import com.kukosin.app.data.ytm.YtmTrack
+import com.kukosin.app.audio.AudioEngineStatus
+import com.kukosin.app.playback.AudioConfig
 import com.kukosin.app.playback.AudioRoute
+import com.kukosin.app.playback.OutputMode
 import com.kukosin.app.playback.OutputDevice
 import com.kukosin.app.playback.PlaybackService
 import com.kukosin.app.playback.QueueManager
@@ -471,7 +475,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                     onQueryChange = viewModel::onQueryChange,
                     onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
                     onRescan = {
-                        if (hasPermission) viewModel.refresh() else permissionLauncher.launch(audioPermissions())
+                        if (hasPermission) viewModel.rescan() else permissionLauncher.launch(audioPermissions())
                     },
                     onOpenSignalPath = { showSignalPath = true },
                     onOpenQueueSheet = { showQueueSheet = true },
@@ -782,23 +786,30 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             output = output,
             autoAnalyze = audioConfig.autoAnalyze,
             onToggleAutoAnalyze = viewModel::toggleAutoAnalyze,
-            audioDriver = audioConfig.driver,
-            onSelectAudioDriver = viewModel::setAudioDriver,
-            targetSampleRate = audioConfig.targetSampleRate,
-            onSelectTargetSampleRate = viewModel::setTargetSampleRate,
-            targetPcmFormat = audioConfig.targetPcmFormat,
-            onSelectTargetPcmFormat = viewModel::setTargetPcmFormat,
-            bitPerfectEnabled = audioConfig.bitPerfectEnabled,
-            onToggleBitPerfect = viewModel::toggleBitPerfect,
-            oboDirectOutput = audioConfig.useOboeDirectOutput,
-            onToggleOboeDirectOutput = viewModel::toggleOboeDirectOutput,
+            outputMode = audioConfig.outputMode,
+            onSelectOutputMode = { mode ->
+                viewModel.setOutputMode(mode)
+                if (mode.needsUsbPermission && !UsbDacManager.current.value.hasPermission) {
+                    UsbDacManager.requestPermission(context)
+                }
+            },
+            strictBitPerfect = audioConfig.strictBitPerfect,
+            onToggleStrictBitPerfect = viewModel::toggleStrictBitPerfect,
+            fades = audioConfig.fades,
+            onToggleFades = { viewModel.setFades(!audioConfig.fades) },
+            bufferMs = audioConfig.bufferMs,
+            onSelectBufferMs = viewModel::setBufferMs,
+            decoder = audioConfig.decoder,
+            onSelectDecoder = { decoder -> viewModel.setDecoder(decoder) },
+            usbPermissionGranted = UsbDacManager.current.value.hasPermission,
+            onRequestUsbPermission = { UsbDacManager.requestPermission(context) },
             accentHue = AccentTheme.hue,
             onPreviewAccent = { AccentTheme.preview(it) },
             onSelectAccent = { AccentTheme.select(it) },
             onCommitAccent = { AccentTheme.commit() },
             onResetAccent = { AccentTheme.reset() },
             onRescan = {
-                if (hasPermission) viewModel.refresh() else permissionLauncher.launch(audioPermissions())
+                if (hasPermission) viewModel.rescan() else permissionLauncher.launch(audioPermissions())
             },
             onDismiss = { showSettings = false },
         )
@@ -2611,6 +2622,15 @@ private fun AudioSignalPathSheet(
     onRequestUsb: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // Estado real del motor: lo que suena, no lo que pedimos.
+    val engineStatus by AudioEngineStatus.status.collectAsState()
+    val engineInfo = engineStatus.info
+    LaunchedEffect(engineInfo.opened) {
+        while (true) {
+            AudioEngineStatus.refresh()
+            delay(500)
+        }
+    }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -2710,8 +2730,23 @@ private fun AudioSignalPathSheet(
                         details = listOf(
                             "Motor Decodificador" to decoderName,
                             "Entrada Stream" to "$codecStr ($bitDepthStr / $sampleRateStr)",
-                            "Salida PCM" to "32-bit IEEE PCM Float ($sampleRateStr)",
-                            "Estado Motor" to "Decodificación Nativa Sin Pérdidas",
+                            "Salida PCM" to if (engineInfo.opened) {
+                                "${engineInfo.source.label} @ ${engineInfo.sourceSampleRate} Hz"
+                            } else {
+                                "Según el decodificador (sin motor abierto)"
+                            },
+                            "Profundidad real" to when {
+                                !engineInfo.opened -> "—"
+                                track != null && track.bitDepth > engineInfo.source.bits ->
+                                    "${engineInfo.source.bits} bits · el archivo tiene ${track.bitDepth}: " +
+                                        "el decoder está recortando (probá Decodificador = Automático o MediaCodec)"
+                                else -> "${engineInfo.source.bits} bits · sin recorte respecto al archivo"
+                            },
+                            "Estado Motor" to if (engineInfo.passthrough) {
+                                "Sin pérdidas · copia directa al DAC"
+                            } else {
+                                "Con conversión en el motor"
+                            },
                         ),
                     )
                 }
@@ -2720,12 +2755,16 @@ private fun AudioSignalPathSheet(
                     SignalNodeCard(
                         stepNumber = "3",
                         title = "Re-Muestreo & DSP",
-                        subtitle = if (output.isDac || output.isBitPerfectSupported) "Bypassed (Bit-Perfect Direct)" else "Frecuencia Nativa Mantenedora",
+                        subtitle = if (engineInfo.converted) "Con conversión (el DAC no acepta el rate)" else "Sin conversión",
                         icon = Icons.Rounded.Settings,
                         details = listOf(
-                            "Estado Resampler" to if (output.isDac || output.isBitPerfectSupported) "OMITIDO / BYPASSED (Bit-Perfect Direct)" else "Inactivo (Sin Re-muestreo)",
-                            "Procesadores DSP" to "Ninguno (Señal Pura Bit a Bit)",
-                            "Velocidad / Pitch" to "Desactivado (1.0x sin interpolación)",
+                            "Resampler" to if (engineInfo.converted) {
+                                "Sí · Kaiser polifásico (el DAC no acepta ${engineInfo.sourceSampleRate} Hz)"
+                            } else {
+                                "Ninguno · el stream va al rate del archivo"
+                            },
+                            "Procesadores DSP" to "Ninguno (la señal no se procesa)",
+                            "Velocidad / Pitch" to "Desactivado (1.0x)",
                         ),
                     )
                 }
@@ -2733,14 +2772,24 @@ private fun AudioSignalPathSheet(
                 item {
                     SignalNodeCard(
                         stepNumber = "4",
-                        title = "AudioTrack & Mezclador Sistema",
-                        subtitle = "PCM_FLOAT / Low Latency Direct",
+                        title = "Motor Oboe (C++ / JNI)",
+                        subtitle = if (engineStatus.mode == OutputMode.DISABLED) {
+                            "No se usa · salida por el mezclador"
+                        } else if (engineInfo.opened) {
+                            "${engineInfo.apiLabel} · ${engineInfo.streamLabel}"
+                        } else {
+                            "Sin stream abierto"
+                        },
                         icon = Icons.Rounded.Memory,
                         details = listOf(
-                            "Formato AudioTrack" to "ENCODING_PCM_FLOAT (32-bit Flotante)",
-                            "Atributos Audio" to "USAGE_MEDIA · CONTENT_TYPE_MUSIC",
-                            "Modo Mezclador" to if (output.isDac) "Direct Bit-Perfect Passthrough" else "AudioTrack Direct Sync",
-                            "Latencia" to "Baja Latencia (Low-Latency Direct)",
+                            "API de audio" to engineInfo.apiLabel,
+                            "Formato del stream" to engineInfo.streamLabel,
+                            "Modo de uso" to if (engineInfo.exclusive) "Exclusivo (MMAP)" else "Compartido",
+                            "Buffer" to if (engineInfo.opened) {
+                                "${engineInfo.bufferFrames} frames · ${Math.round(engineInfo.bufferMs)} ms"
+                            } else "—",
+                            "XRuns" to if (engineInfo.xRuns < 0) "No reportado" else engineInfo.xRuns.toString(),
+                            "Copia de muestras" to if (engineInfo.passthrough) "memcpy (sin conversión)" else "con conversión",
                         ),
                     )
                 }
@@ -2751,12 +2800,33 @@ private fun AudioSignalPathSheet(
                         title = "Dispositivo de Salida (Output Hardware)",
                         subtitle = "${output.typeLabel} (${output.name})",
                         icon = if (output.isDac) Icons.Rounded.Usb else Icons.Rounded.Headphones,
-                        isHighlight = output.isDac || output.isBitPerfectSupported,
+                        isHighlight = engineStatus.bitPerfectNow,
                         details = listOf(
-                            "Dispositivo Salida" to output.name,
+                            "Dispositivo Salida" to engineStatus.deviceName.ifBlank { output.name },
                             "Tipo Conexión" to output.typeLabel,
                             "Frecuencias DAC" to output.sampleRatesLabel,
-                            "Estado Bit-Perfect" to if (output.isDac || output.isBitPerfectSupported) "ACTIVO (Transferencia Bit a Bit Directa)" else "Mezclador Estándar",
+                            "Modo de salida" to engineStatus.mode.label,
+                            "Volumen" to when {
+                                engineStatus.mode == OutputMode.DISABLED -> "Lo controla el sistema"
+                                engineStatus.mode.locksVolume -> engineStatus.mode.volumeHint
+                                engineStatus.mode.usesHardwareVolume -> engineStatus.mode.volumeHint
+                                else -> "${engineStatus.mode.volumeHint} · ${engineInfo.volumePercent} %"
+                            },
+                            "Estado Bit-Perfect" to if (engineStatus.bitPerfectNow) {
+                                "ACTIVO · transferencia bit a bit"
+                            } else {
+                                when {
+                                    engineStatus.mode == OutputMode.DISABLED ->
+                                        "No · modo Desactivado (mezclador Android)"
+                                    engineStatus.builtinSpeaker ->
+                                        "No · el altavoz interno no puede ser bit-perfect"
+                                    !engineInfo.opened -> "Sin stream"
+                                    !engineInfo.exclusive -> "Compartido con el mezclador"
+                                    engineInfo.converted -> "Convertido al formato del DAC"
+                                    engineInfo.volumePercent < 100 -> "Atenuado digitalmente (${engineInfo.volumePercent} %)"
+                                    else -> "Inactivo"
+                                }
+                            },
                             "Permiso USB Host" to if (output.hasUsbPermission) "Concedido (Acceso Directo Hardware)" else "No Requerido / Estándar",
                         ),
                     )
@@ -3157,7 +3227,11 @@ private fun MetadataInspectorDialog(
                         MetaItem("Ruta de Archivo", track.filePath.ifBlank { track.uri.toString() })
                         MetaItem("Tamaño de Archivo", track.fileSizeLabel)
                         MetaItem("Salida Activa", "${output.typeLabel} (${output.name})", onClick = onOpenSignalPath)
-                        MetaItem("Estado Bit-Perfect", if (output.isBitPerfectSupported) "Soportado / Activo" else "Mezclador Estándar", onClick = onOpenSignalPath)
+                        MetaItem(
+                            "Estado Bit-Perfect",
+                            if (AudioEngineStatus.status.value.bitPerfectNow) "Activo · bit a bit" else "No activo",
+                            onClick = onOpenSignalPath,
+                        )
                         MetaItem("Frecuencias Soportadas DAC", output.sampleRatesLabel, onClick = onOpenSignalPath)
                     }
                     item {
@@ -3170,21 +3244,49 @@ private fun MetadataInspectorDialog(
 }
 
 @Composable
+/** Fila etiqueta/valor del panel del motor. */
+@Composable
+private fun SettingsStatusLine(label: String, value: String, highlight: Boolean = false) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = CreamMuted,
+            modifier = Modifier.weight(0.36f),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (highlight) Gold else Cream,
+            fontWeight = if (highlight) FontWeight.Bold else FontWeight.Medium,
+            modifier = Modifier.weight(0.64f),
+            textAlign = TextAlign.End,
+        )
+    }
+}
+
 private fun FullScreenSettingsScreen(
     visibilityState: MutableTransitionState<Boolean>,
     output: OutputDevice,
     autoAnalyze: Boolean,
     onToggleAutoAnalyze: () -> Unit,
-    audioDriver: String,
-    onSelectAudioDriver: (String) -> Unit,
-    targetSampleRate: String,
-    onSelectTargetSampleRate: (String) -> Unit,
-    targetPcmFormat: String,
-    onSelectTargetPcmFormat: (String) -> Unit,
-    bitPerfectEnabled: Boolean,
-    onToggleBitPerfect: () -> Unit,
-    oboDirectOutput: Boolean,
-    onToggleOboeDirectOutput: () -> Unit,
+    outputMode: OutputMode,
+    onSelectOutputMode: (OutputMode) -> Unit,
+    strictBitPerfect: Boolean,
+    onToggleStrictBitPerfect: () -> Unit,
+    fades: Boolean,
+    onToggleFades: () -> Unit,
+    bufferMs: Int,
+    onSelectBufferMs: (Int) -> Unit,
+    decoder: String,
+    onSelectDecoder: (String) -> Unit,
+    usbPermissionGranted: Boolean,
+    onRequestUsbPermission: () -> Unit,
     accentHue: Float,
     onPreviewAccent: (Float) -> Unit,
     onSelectAccent: (AccentPreset) -> Unit,
@@ -3193,6 +3295,17 @@ private fun FullScreenSettingsScreen(
     onRescan: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // Estado real del motor nativo: lo que suena, no lo que pedimos.
+    val engineStatus by AudioEngineStatus.status.collectAsState()
+    val engineInfo = engineStatus.info
+    val engineStateText = if (engineInfo.opened) "Abierto · ${engineInfo.apiLabel}" else "Sin stream abierto"
+    LaunchedEffect(engineInfo.opened) {
+        while (true) {
+            AudioEngineStatus.refresh()
+            delay(500)
+        }
+    }
+
     val transition = rememberTransition(visibilityState, label = "settingsScreen")
     val reveal by transition.animateFloat(
         transitionSpec = {
@@ -3247,7 +3360,7 @@ private fun FullScreenSettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     item {
-                        Text("Controlador de Salida Audio (Audio Driver)", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Modo de Salida de Audio", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
@@ -3255,80 +3368,149 @@ private fun FullScreenSettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Motor / API de Salida de Sonido", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Text("Camino de la señal hasta el DAC", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "Selecciona la API nativa de Android para entregar las muestras de audio al hardware.",
+                                    "Cuatro caminos con semántica propia. Sólo los tres exclusivos usan el motor de Oboe, " +
+                                        "y el bit-perfect sólo existe con un DAC: el altavoz interno siempre pasa por el " +
+                                        "DSP y el amplificador del teléfono.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = CreamMuted,
                                 )
                                 Spacer(Modifier.height(10.dp))
-                                val drivers = listOf("AAudio", "AudioTrack", "Hi-Res Direct", "OpenSL ES")
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    drivers.forEach { driver ->
-                                        val selected = audioDriver == driver
-                                        Surface(
-                                            color = if (selected) Gold else Ink,
-                                            shape = RoundedCornerShape(10.dp),
-                                            border = androidx.compose.foundation.BorderStroke(1.dp, Gold),
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .clickable { onSelectAudioDriver(driver) },
+                                OutputMode.entriesInOrder.forEach { mode ->
+                                    val selected = outputMode == mode
+                                    Surface(
+                                        color = if (selected) Gold.copy(alpha = 0.14f) else Ink,
+                                        shape = RoundedCornerShape(12.dp),
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            1.dp,
+                                            if (selected) Gold else Cream.copy(alpha = 0.10f),
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { onSelectOutputMode(mode) },
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalAlignment = Alignment.Top,
                                         ) {
-                                            Text(
-                                                text = driver,
-                                                color = if (selected) Ink else Gold,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                fontWeight = FontWeight.Bold,
-                                                modifier = Modifier.padding(vertical = 8.dp),
-                                                textAlign = TextAlign.Center,
-                                            )
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    mode.label,
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (selected) Gold else Cream,
+                                                )
+                                                Spacer(Modifier.height(2.dp))
+                                                Text(
+                                                    mode.description,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = CreamMuted,
+                                                )
+                                                Spacer(Modifier.height(4.dp))
+                                                Text(
+                                                    mode.volumeHint,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = if (selected) Gold else CreamMuted.copy(alpha = 0.7f),
+                                                )
+                                            }
+                                            if (selected) {
+                                                Spacer(Modifier.width(8.dp))
+                                                Icon(
+                                                    Icons.Rounded.Check,
+                                                    contentDescription = null,
+                                                    tint = Gold,
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            }
                                         }
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                }
+
+                                if (outputMode.requiresUsb && !output.isUsb) {
+                                    Text(
+                                        "No hay DAC USB conectado: en este modo no hay a dónde abrir el stream. " +
+                                            "La app sigue sonando, pero no puede ser bit-perfect.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFFFFB26B),
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                }
+
+                                if (outputMode.needsUsbPermission && !usbPermissionGranted) {
+                                    Text(
+                                        "Este modo necesita permiso USB para tomar el DAC.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFFFFB26B),
+                                    )
+                                    Spacer(Modifier.height(6.dp))
+                                    Surface(
+                                        color = Gold,
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { onRequestUsbPermission() },
+                                    ) {
+                                        Text(
+                                            "Conceder permiso USB",
+                                            color = Ink,
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            modifier = Modifier.padding(vertical = 10.dp),
+                                            textAlign = TextAlign.Center,
+                                        )
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                }
+
+                                Spacer(Modifier.height(4.dp))
+                                SettingsStatusLine("Estado", engineStateText)
+                                SettingsStatusLine("API", engineInfo.apiLabel)
+                                SettingsStatusLine("Dispositivo", engineStatus.deviceName.ifBlank { output.name })
+                                SettingsStatusLine("Stream", engineInfo.streamLabel)
+                                SettingsStatusLine(
+                                    "Bit-perfect ahora",
+                                    when {
+                                        engineStatus.bitPerfectNow -> "Sí · exclusivo, sin conversión, volumen 100 %"
+                                        engineStatus.mode == OutputMode.DISABLED -> "No · modo Desactivado (mezclador Android)"
+                                        engineStatus.builtinSpeaker -> "No · el altavoz interno no puede ser bit-perfect"
+                                        !engineInfo.opened -> "Sin stream abierto"
+                                        !engineInfo.exclusive -> "No · el mezclador comparte la salida"
+                                        engineInfo.converted -> "No · convertido al formato del DAC"
+                                        engineInfo.volumePercent < 100 -> "No · volumen al ${engineInfo.volumePercent} %"
+                                        else -> "No"
+                                    },
+                                    highlight = engineStatus.bitPerfectNow,
+                                )
+                                if (engineInfo.opened) {
+                                    SettingsStatusLine(
+                                        "Buffer",
+                                        "${engineInfo.bufferFrames} frames · " +
+                                            "${Math.round(engineInfo.bufferMs)} ms · burst ${engineInfo.framesPerBurst}",
+                                    )
+                                    SettingsStatusLine(
+                                        "Xruns",
+                                        if (engineInfo.xRuns < 0) "No reportado" else engineInfo.xRuns.toString(),
+                                    )
+                                    if (engineInfo.xRuns > 0) {
+                                        Spacer(Modifier.height(6.dp))
+                                        Text(
+                                            "Hubo ${engineInfo.xRuns} xrun: el motor se quedó sin datos o el sistema " +
+                                                "no lo atendió a tiempo. Si se escucha un chasquido, subí el Buffer de salida.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color(0xFFFFB26B),
+                                        )
                                     }
                                 }
-                            }
-                        }
-                    }
-
-                    item {
-                        Text("Tasa de Muestreo Objetivo (Sample Rate)", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(6.dp))
-                        Surface(
-                            color = InkSoft,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Frecuencia de Trabajo ($targetSampleRate)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    "Dependiendo del controlador seleccionado, puedes forzar una tasa fija o seguir el archivo original.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = CreamMuted,
-                                )
-                                Spacer(Modifier.height(10.dp))
-                                val sampleRates = listOf("Auto (Bit-Perfect)", "44.1 kHz", "48.0 kHz", "88.2 kHz", "96.0 kHz", "192.0 kHz", "384.0 kHz")
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    items(sampleRates) { rate ->
-                                        val selected = targetSampleRate == rate
-                                        Surface(
-                                            color = if (selected) Gold else Ink,
-                                            shape = RoundedCornerShape(10.dp),
-                                            border = androidx.compose.foundation.BorderStroke(1.dp, Gold),
-                                            modifier = Modifier.clickable { onSelectTargetSampleRate(rate) },
-                                        ) {
-                                            Text(
-                                                text = rate,
-                                                color = if (selected) Ink else Gold,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                fontWeight = FontWeight.Bold,
-                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                            )
-                                        }
-                                    }
+                                engineStatus.message?.let { message ->
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        message,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFFFF6B6B),
+                                    )
                                 }
                             }
                         }
@@ -3358,7 +3540,85 @@ private fun FullScreenSettingsScreen(
                     }
 
                     item {
-                        Text("Formato de Muestreo PCM & Profundidad", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Bit-Perfect Estricto", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                        Surface(
+                            color = InkSoft,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Nunca convertir", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        "Si el DAC no acepta el formato exacto, la reproducción falla y avisa en vez de " +
+                                            "resamplear por atrás. Apagado (recomendado), intenta bit-perfect primero y " +
+                                            "sólo si no se puede convierte con el resampler Kaiser del motor.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = CreamMuted,
+                                    )
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Switch(
+                                    checked = strictBitPerfect,
+                                    onCheckedChange = { onToggleStrictBitPerfect() },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Ink,
+                                        checkedTrackColor = Gold,
+                                        uncheckedThumbColor = CreamMuted,
+                                        uncheckedTrackColor = InkSoft,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+
+                    item {
+                        Text("Fundidos de Entrada y Salida", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                        Surface(
+                            color = InkSoft,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Fundidos suaves", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        "25 ms al arrancar y 60 ms al pausar o detener, más un fundido corto después de " +
+                                            "cada salto: sin clics ni cortes secos. Apagalo si querés la señal intacta " +
+                                            "desde el primer frame (durante el fundido la ganancia no es 100 %).",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = CreamMuted,
+                                    )
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Switch(
+                                    checked = fades,
+                                    onCheckedChange = { onToggleFades() },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Ink,
+                                        checkedTrackColor = Gold,
+                                        uncheckedThumbColor = CreamMuted,
+                                        uncheckedTrackColor = InkSoft,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+
+                    item {
+                        Text("Buffer de Salida", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
@@ -3366,25 +3626,32 @@ private fun FullScreenSettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Text("Codificación PCM ($targetPcmFormat)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Text("Buffer interno del motor ($bufferMs ms)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Es el buffer del motor en memoria de la app, el que absorbe los tirones del " +
+                                        "decodificador. El buffer de hardware de AAudio se queda en el mínimo (2 ráfagas) " +
+                                        "para que un salto o un desplazamiento sea instantáneo: vaciarlo no cuesta nada.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = CreamMuted,
+                                )
                                 Spacer(Modifier.height(10.dp))
-                                val pcmFormats = listOf("PCM Float 32-bit", "PCM Int 24-bit", "PCM Int 16-bit", "Auto")
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
-                                    pcmFormats.forEach { fmt ->
-                                        val selected = targetPcmFormat == fmt
+                                    AudioConfig.BUFFER_OPTIONS.forEach { option ->
+                                        val selected = bufferMs == option
                                         Surface(
                                             color = if (selected) Gold else Ink,
                                             shape = RoundedCornerShape(10.dp),
                                             border = androidx.compose.foundation.BorderStroke(1.dp, Gold),
                                             modifier = Modifier
                                                 .weight(1f)
-                                                .clickable { onSelectTargetPcmFormat(fmt) },
+                                                .clickable { onSelectBufferMs(option) },
                                         ) {
                                             Text(
-                                                text = fmt,
+                                                text = "$option ms",
                                                 color = if (selected) Ink else Gold,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 fontWeight = FontWeight.Bold,
@@ -3399,75 +3666,49 @@ private fun FullScreenSettingsScreen(
                     }
 
                     item {
-                        Text("Modo Bit-Perfect (Passthrough Directo)", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Text("Decodificador", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Surface(
                             color = InkSoft,
                             shape = RoundedCornerShape(16.dp),
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("Activar Direct Hardware Access", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(
-                                        "Garantiza salida exacta bit por bit sin procesamiento ni alteración del mezclador Android.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = CreamMuted,
-                                    )
-                                }
-                                Spacer(Modifier.width(12.dp))
-                                Switch(
-                                    checked = bitPerfectEnabled,
-                                    onCheckedChange = { onToggleBitPerfect() },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = Ink,
-                                        checkedTrackColor = Gold,
-                                        uncheckedThumbColor = CreamMuted,
-                                        uncheckedTrackColor = InkSoft,
-                                    ),
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text("Profundidad real del PCM", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Define con qué profundidad sale el PCM del decoder. El decodificador del sistema " +
+                                        "(MediaCodec) entrega la profundidad real del archivo; FFmpeg es más compatible con " +
+                                        "formatos raros (APE, DSD, WavPack) pero entrega 16 bits.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = CreamMuted,
                                 )
-                            }
-                        }
-                    }
-
-                    item {
-                        Text("Motor de Audio Oboe (Salida Directa)", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(6.dp))
-                        Surface(
-                            color = InkSoft,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("Usar motor nativo Oboe (C++ / JNI)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(
-                                        "Rutea el audio decodificado directamente al motor Oboe (AAudio/OpenSL ES), aplicando el controlador y formato PCM seleccionados arriba.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = CreamMuted,
-                                    )
+                                Spacer(Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    listOf("Automático", "MediaCodec", "FFmpeg (Lossless)").forEach { option ->
+                                        val selected = decoder == option
+                                        Surface(
+                                            color = if (selected) Gold else Ink,
+                                            shape = RoundedCornerShape(10.dp),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, Gold),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable { onSelectDecoder(option) },
+                                        ) {
+                                            Text(
+                                                text = option,
+                                                color = if (selected) Ink else Gold,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                                textAlign = TextAlign.Center,
+                                            )
+                                        }
+                                    }
                                 }
-                                Spacer(Modifier.width(12.dp))
-                                Switch(
-                                    checked = oboDirectOutput,
-                                    onCheckedChange = { onToggleOboeDirectOutput() },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = Ink,
-                                        checkedTrackColor = Gold,
-                                        uncheckedThumbColor = CreamMuted,
-                                        uncheckedTrackColor = InkSoft,
-                                    ),
-                                )
                             }
                         }
                     }

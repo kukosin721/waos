@@ -102,6 +102,39 @@ object AudioRoute {
         audioManager = null
     }
 
+    private val USB_TYPES = setOf(
+        AudioDeviceInfo.TYPE_USB_DEVICE,
+        AudioDeviceInfo.TYPE_USB_HEADSET,
+        AudioDeviceInfo.TYPE_USB_ACCESSORY,
+    )
+
+    private val WIRED_TYPES = setOf(
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        AudioDeviceInfo.TYPE_LINE_ANALOG,
+        AudioDeviceInfo.TYPE_LINE_DIGITAL,
+    )
+
+    /**
+     * Dispositivo al que apunta un modo de salida.
+     *
+     * DAC USB → sólo USB. Controlador directo → USB si está, si no el codec con cable.
+     * AAudio exclusivo → jack / línea. Desactivado → el que decida el sistema.
+     */
+    fun deviceFor(mode: OutputMode): AudioDeviceInfo? {
+        val audioManager = audioManager ?: return null
+        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { it.isSink }
+        return when (mode) {
+            OutputMode.USB_DAC -> devices.firstOrNull { it.type in USB_TYPES }
+            OutputMode.DIRECT_DRIVER -> devices.firstOrNull { it.type in USB_TYPES }
+                ?: devices.firstOrNull { it.type in WIRED_TYPES }
+            OutputMode.AAUDIO_EXCLUSIVE -> devices.firstOrNull { it.type in WIRED_TYPES }
+            OutputMode.DISABLED -> null
+        }
+    }
+
+    fun deviceIdFor(mode: OutputMode): Int = deviceFor(mode)?.id ?: 0
+
     private fun pickPreferred(audioManager: AudioManager): AudioDeviceInfo? {
         val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
         return devices

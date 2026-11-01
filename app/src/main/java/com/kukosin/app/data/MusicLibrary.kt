@@ -9,8 +9,13 @@ import android.os.Build
 import android.provider.MediaStore
 import io.github.anilbeesetti.nextlib.mediainfo.MediaInfoBuilder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 object MusicLibrary {
     private val audioExtensions = listOf(
@@ -36,10 +41,66 @@ object MusicLibrary {
         byKey.values.sortedBy { it.title.lowercase() }
     }
 
+    // --- Caché de sondeo: memoria + disco -------------------------------------------
+    // Sin esto, cada arranque volvía a abrir TODOS los archivos para leer duración,
+    // sample rate, profundidad y etiquetas. La caché de disco vive en filesDir.
+    private const val PROBE_CONCURRENCY = 4
+    private const val SAVE_INTERVAL_MS = 10_000L
+
+    private val probeCache = ConcurrentHashMap<String, Track>()
+
+    @Volatile
+    private var cacheLoaded = false
+
+    @Volatile
+    private var lastSaveAtMs = 0L
+
     suspend fun enrich(context: Context, tracks: List<Track>): List<Track> = withContext(Dispatchers.IO) {
-        tracks.map { track ->
-            runCatching { probe(context, track) }.getOrDefault(track)
+        ensureCacheLoaded(context)
+        if (tracks.isEmpty()) return@withContext tracks
+        val enriched = arrayOfNulls<Track>(tracks.size)
+        val permits = Semaphore(PROBE_CONCURRENCY)
+        coroutineScope {
+            tracks.forEachIndexed { index, track ->
+                launch {
+                    permits.withPermit {
+                        enriched[index] = probeCached(context, track)
+                    }
+                }
+            }
         }
+        persistCacheIfDue(context)
+        List(tracks.size) { index -> enriched[index] ?: tracks[index] }
+    }
+
+    private fun ensureCacheLoaded(context: Context) {
+        if (cacheLoaded) return
+        cacheLoaded = true
+        val stored = LibraryCacheStore.load(context)
+        if (stored.isNotEmpty()) probeCache.putAll(stored)
+    }
+
+    private fun persistCacheIfDue(context: Context) {
+        val now = System.currentTimeMillis()
+        if (now - lastSaveAtMs < SAVE_INTERVAL_MS) return
+        lastSaveAtMs = now
+        LibraryCacheStore.save(context, probeCache)
+    }
+
+    private fun probeCached(context: Context, track: Track): Track {
+        val key = track.uri.toString()
+        probeCache[key]?.let { return it }
+        val probed = runCatching { probe(context, track) }.getOrDefault(track)
+        probeCache[key] = probed
+        return probed
+    }
+
+    /** "Volver a escanear": tira la caché en memoria y en disco. */
+    fun invalidateProbeCache(context: Context?) {
+        probeCache.clear()
+        cacheLoaded = false
+        lastSaveAtMs = 0L
+        if (context != null) LibraryCacheStore.clear(context)
     }
 
     fun buildFolderTree(tracks: List<Track>): FolderNode {

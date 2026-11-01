@@ -253,28 +253,30 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         AudioSettingsManager.init(getApplication())
     }
 
+    /** "Volver a escanear": tira la caché de sondeo (memoria + disco) y reconstruye. */
+    fun rescan() {
+        MusicLibrary.invalidateProbeCache(getApplication())
+        refresh()
+    }
+
     fun toggleAutoAnalyze() {
         AudioSettingsManager.setAutoAnalyze(!audioConfig.value.autoAnalyze)
     }
 
-    fun setAudioDriver(driver: String) {
-        AudioSettingsManager.setDriver(driver)
+    fun setOutputMode(mode: com.kukosin.app.playback.OutputMode) {
+        AudioSettingsManager.setOutputMode(mode)
     }
 
-    fun setTargetSampleRate(rate: String) {
-        AudioSettingsManager.setTargetSampleRate(rate)
+    fun toggleStrictBitPerfect() {
+        AudioSettingsManager.setStrictBitPerfect(!audioConfig.value.strictBitPerfect)
     }
 
-    fun setTargetPcmFormat(format: String) {
-        AudioSettingsManager.setTargetPcmFormat(format)
+    fun setBufferMs(ms: Int) {
+        AudioSettingsManager.setBufferMs(ms)
     }
 
-    fun toggleBitPerfect() {
-        AudioSettingsManager.setBitPerfectEnabled(!audioConfig.value.bitPerfectEnabled)
-    }
-
-    fun toggleOboeDirectOutput() {
-        AudioSettingsManager.setUseOboeDirectOutput(!audioConfig.value.useOboeDirectOutput)
+    fun setFades(enabled: Boolean) {
+        AudioSettingsManager.setFades(enabled)
     }
 
     fun setDecoder(decoder: String) {

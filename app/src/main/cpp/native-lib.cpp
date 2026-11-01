@@ -6,18 +6,18 @@
 
 #include "audio/AudioEngine.h"
 
-#define LOG_TAG "AudioEngineJNI"
+#define LOG_TAG "KukosinAudioJNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// Stable integer protocol shared with com.kukosin.app.audio.AudioEngine.
+// Protocolo entero compartido con com.kukosin.app.audio.AudioEngine.
 //
-// Driver code:   0 = AAudio, 1 = OpenSL ES, -1 = Auto (unspecified).
-// Format code:   0 = PCM I16, 1 = PCM I24, 2 = PCM Float 32, 3 = PCM I32.
-// Sharing code:  0 = Shared, 1 = Exclusive.
-// Performance:   0 = None, 1 = PowerSaving, 2 = LowLatency.
-// Source mode:   0 = Tone, 1 = Pcm.
-// Output path:   0 = Direct, 1 = Integrated exclusive AAudio, 2 = USB DAC.
+// Formato:      0 = PCM I16, 1 = PCM I24, 2 = PCM Float 32, 3 = PCM I32.
+// Estado:       valores de oboe::StreamState.
+// Info[i]:      0 api · 1 formato stream · 2 rate stream · 3 canales stream ·
+//               4 framesPerBurst · 5 bufferFrames · 6 deviceId · 7 xRuns ·
+//               8 exclusivo · 9 bitPerfect · 10 passthrough · 11 errorCode ·
+//               12 volumen % · 13 formato origen · 14 rate origen · 15 canales origen
 
 namespace {
 
@@ -25,45 +25,17 @@ audio::AudioEngine* engineFrom(jlong handle) {
     return reinterpret_cast<audio::AudioEngine*>(handle);
 }
 
-oboe::AudioApi toAudioApi(jint code) {
+audio::PcmFormat toFormat(jint code) {
     switch (code) {
-        case 0: return oboe::AudioApi::AAudio;
-        case 1: return oboe::AudioApi::OpenSLES;
-        default: return oboe::AudioApi::Unspecified;
+        case 0: return audio::PcmFormat::kI16;
+        case 1: return audio::PcmFormat::kI24;
+        case 2: return audio::PcmFormat::kF32;
+        case 3: return audio::PcmFormat::kI32;
+        default: return audio::PcmFormat::kI16;
     }
 }
 
-oboe::AudioFormat toAudioFormat(jint code) {
-    switch (code) {
-        case 0: return oboe::AudioFormat::I16;
-        case 1: return oboe::AudioFormat::I24;
-        case 2: return oboe::AudioFormat::Float;
-        case 3: return oboe::AudioFormat::I32;
-        default: return oboe::AudioFormat::Unspecified;
-    }
-}
-
-oboe::SharingMode toSharingMode(jint code) {
-    return code == 1 ? oboe::SharingMode::Exclusive : oboe::SharingMode::Shared;
-}
-
-oboe::PerformanceMode toPerformanceMode(jint code) {
-    switch (code) {
-        case 1: return oboe::PerformanceMode::PowerSaving;
-        case 2: return oboe::PerformanceMode::LowLatency;
-        default: return oboe::PerformanceMode::None;
-    }
-}
-
-jint formatToCode(oboe::AudioFormat format) {
-    switch (format) {
-        case oboe::AudioFormat::I16: return 0;
-        case oboe::AudioFormat::I24: return 1;
-        case oboe::AudioFormat::Float: return 2;
-        case oboe::AudioFormat::I32: return 3;
-        default: return 2;
-    }
-}
+constexpr jint kInfoSize = 16;
 
 } // namespace
 
@@ -73,7 +45,7 @@ JNIEXPORT jlong JNICALL
 Java_com_kukosin_app_audio_AudioEngine_nativeCreate(JNIEnv* /*env*/, jobject /*thiz*/) {
     auto* engine = new (std::nothrow) audio::AudioEngine();
     if (engine == nullptr) {
-        LOGE("out of memory creating AudioEngine");
+        LOGE("sin memoria para AudioEngine");
         return 0;
     }
     return reinterpret_cast<jlong>(engine);
@@ -87,93 +59,63 @@ Java_com_kukosin_app_audio_AudioEngine_nativeDelete(JNIEnv* /*env*/, jobject /*t
 
 JNIEXPORT jint JNICALL
 Java_com_kukosin_app_audio_AudioEngine_nativeConfigure(JNIEnv* /*env*/, jobject /*thiz*/,
-                                                       jlong handle, jint api, jint format,
+                                                       jlong handle, jint format,
                                                        jint sampleRate, jint channelCount,
-                                                       jint sharingMode, jint performanceMode,
-                                                       jint deviceId, jboolean bitPerfect,
-                                                       jint outputPath) {
+                                                       jint deviceId, jboolean strict,
+                                                       jboolean requireExclusive, jint bufferMs,
+                                                       jboolean fades) {
     auto* engine = engineFrom(handle);
     if (engine == nullptr) {
         return static_cast<jint>(oboe::Result::ErrorNull);
     }
-
     audio::EngineConfig config;
-    config.audioApi = toAudioApi(api);
-    config.format = toAudioFormat(format);
-    config.sampleRate = sampleRate > 0 ? sampleRate : 0;
-    config.channelCount = channelCount > 0 ? channelCount : oboe::ChannelCount::Stereo;
-    config.sharingMode = toSharingMode(sharingMode);
-    config.performanceMode = toPerformanceMode(performanceMode);
+    config.sourceFormat = toFormat(format);
+    config.sourceSampleRate = sampleRate > 0 ? sampleRate : 0;
+    config.sourceChannels = channelCount > 0 ? channelCount : 2;
     config.deviceId = deviceId;
-    config.bitPerfect = bitPerfect == JNI_TRUE;
-    switch (outputPath) {
-        case 1: config.outputPath = audio::OutputPath::kIntegratedExclusive; break;
-        case 2: config.outputPath = audio::OutputPath::kUsbDac; break;
-        default: config.outputPath = audio::OutputPath::kDirect; break;
-    }
-
-    const oboe::Result result = engine->open(config);
-    return static_cast<jint>(result);
+    config.strictBitPerfect = strict == JNI_TRUE;
+    config.requireExclusive = requireExclusive == JNI_TRUE;
+    config.bufferMs = bufferMs > 0 ? bufferMs : 250;
+    config.fades = fades == JNI_TRUE;
+    return static_cast<jint>(engine->open(config));
 }
 
 JNIEXPORT jint JNICALL
 Java_com_kukosin_app_audio_AudioEngine_nativeStart(JNIEnv* /*env*/, jobject /*thiz*/,
                                                    jlong handle) {
     auto* engine = engineFrom(handle);
-    if (engine == nullptr) {
-        return static_cast<jint>(oboe::Result::ErrorNull);
-    }
-    return static_cast<jint>(engine->start());
+    return engine == nullptr ? static_cast<jint>(oboe::Result::ErrorNull)
+                             : static_cast<jint>(engine->start());
 }
 
 JNIEXPORT jint JNICALL
 Java_com_kukosin_app_audio_AudioEngine_nativeStop(JNIEnv* /*env*/, jobject /*thiz*/,
                                                   jlong handle) {
     auto* engine = engineFrom(handle);
-    if (engine == nullptr) {
-        return static_cast<jint>(oboe::Result::ErrorNull);
-    }
-    return static_cast<jint>(engine->stop());
+    return engine == nullptr ? static_cast<jint>(oboe::Result::ErrorNull)
+                             : static_cast<jint>(engine->stop());
 }
 
 JNIEXPORT jint JNICALL
 Java_com_kukosin_app_audio_AudioEngine_nativePause(JNIEnv* /*env*/, jobject /*thiz*/,
                                                    jlong handle) {
     auto* engine = engineFrom(handle);
-    if (engine == nullptr) {
-        return static_cast<jint>(oboe::Result::ErrorNull);
-    }
-    return static_cast<jint>(engine->pause());
+    return engine == nullptr ? static_cast<jint>(oboe::Result::ErrorNull)
+                             : static_cast<jint>(engine->pause());
 }
 
 JNIEXPORT jint JNICALL
 Java_com_kukosin_app_audio_AudioEngine_nativeFlush(JNIEnv* /*env*/, jobject /*thiz*/,
                                                    jlong handle) {
     auto* engine = engineFrom(handle);
-    if (engine == nullptr) {
-        return static_cast<jint>(oboe::Result::ErrorNull);
-    }
-    return static_cast<jint>(engine->flush());
+    return engine == nullptr ? static_cast<jint>(oboe::Result::ErrorNull)
+                             : static_cast<jint>(engine->flush());
 }
 
-JNIEXPORT void JNICALL
-Java_com_kukosin_app_audio_AudioEngine_nativeSetVolume(JNIEnv* /*env*/, jobject /*thiz*/,
-                                                       jlong handle, jfloat volume) {
-    auto* engine = engineFrom(handle);
-    if (engine != nullptr) {
-        engine->setVolume(volume);
-    }
-}
-
-JNIEXPORT void JNICALL
-Java_com_kukosin_app_audio_AudioEngine_nativeSetSourceMode(JNIEnv* /*env*/, jobject /*thiz*/,
-                                                           jlong handle, jint mode) {
-    auto* engine = engineFrom(handle);
-    if (engine != nullptr) {
-        engine->setSourceMode(mode == 1 ? audio::SourceMode::kPcm : audio::SourceMode::kTone);
-    }
-}
-
+/**
+ * Copia PCM ya decodificado al ring del motor.
+ * Devuelve los bytes de ORIGEN aceptados (0 = reintentar más tarde).
+ */
 JNIEXPORT jint JNICALL
 Java_com_kukosin_app_audio_AudioEngine_nativeWritePacked(JNIEnv* env, jobject /*thiz*/,
                                                          jlong handle, jobject buffer,
@@ -190,27 +132,18 @@ Java_com_kukosin_app_audio_AudioEngine_nativeWritePacked(JNIEnv* env, jobject /*
     if (capacity < 0 || static_cast<jlong>(offset) + static_cast<jlong>(length) > capacity) {
         return 0;
     }
-    const size_t written = engine->writePacked(
+    const size_t accepted = engine->writePacked(
             static_cast<const uint8_t*>(base) + offset, static_cast<size_t>(length));
-    return static_cast<jint>(written);
+    return static_cast<jint>(accepted);
 }
 
-JNIEXPORT jint JNICALL
-Java_com_kukosin_app_audio_AudioEngine_nativeWritePcm(JNIEnv* env, jobject /*thiz*/,
-                                                      jlong handle, jfloatArray samples,
-                                                      jint sampleCount) {
+JNIEXPORT void JNICALL
+Java_com_kukosin_app_audio_AudioEngine_nativeSetVolume(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                       jlong handle, jfloat volume) {
     auto* engine = engineFrom(handle);
-    if (engine == nullptr || sampleCount <= 0) {
-        return 0;
+    if (engine != nullptr) {
+        engine->setVolume(volume);
     }
-
-    jfloat* data = env->GetFloatArrayElements(samples, nullptr);
-    if (data == nullptr) {
-        return 0;
-    }
-    const size_t written = engine->writePcm(data, static_cast<size_t>(sampleCount));
-    env->ReleaseFloatArrayElements(samples, data, JNI_ABORT);
-    return static_cast<jint>(written);
 }
 
 JNIEXPORT jint JNICALL
@@ -223,74 +156,55 @@ Java_com_kukosin_app_audio_AudioEngine_nativeGetState(JNIEnv* /*env*/, jobject /
     return static_cast<jint>(engine->state());
 }
 
-JNIEXPORT jint JNICALL
-Java_com_kukosin_app_audio_AudioEngine_nativeGetActualSampleRate(JNIEnv* /*env*/, jobject /*thiz*/,
-                                                                 jlong handle) {
-    auto* engine = engineFrom(handle);
-    if (engine == nullptr) {
-        return 0;
-    }
-    return engine->actualSampleRate();
-}
-
-JNIEXPORT jint JNICALL
-Java_com_kukosin_app_audio_AudioEngine_nativeGetActualFormat(JNIEnv* /*env*/, jobject /*thiz*/,
+JNIEXPORT jlong JNICALL
+Java_com_kukosin_app_audio_AudioEngine_nativeGetSourceFrames(JNIEnv* /*env*/, jobject /*thiz*/,
                                                              jlong handle) {
     auto* engine = engineFrom(handle);
     if (engine == nullptr) {
-        return 2;
+        return 0;
     }
-    return formatToCode(engine->actualFormat());
+    return static_cast<jlong>(engine->sourceFramesConsumed());
 }
 
 JNIEXPORT jint JNICALL
-Java_com_kukosin_app_audio_AudioEngine_nativeGetFramesPerBurst(JNIEnv* /*env*/, jobject /*thiz*/,
-                                                               jlong handle) {
+Java_com_kukosin_app_audio_AudioEngine_nativeErrorCode(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                       jlong handle) {
     auto* engine = engineFrom(handle);
     if (engine == nullptr) {
-        return 0;
+        return static_cast<jint>(oboe::Result::ErrorNull);
     }
-    return engine->framesPerBurst();
+    return static_cast<jint>(engine->lastErrorCode());
 }
 
-JNIEXPORT jlong JNICALL
-Java_com_kukosin_app_audio_AudioEngine_nativeGetPositionFrames(JNIEnv* /*env*/, jobject /*thiz*/,
-                                                                  jlong handle) {
+JNIEXPORT void JNICALL
+Java_com_kukosin_app_audio_AudioEngine_nativeGetInfo(JNIEnv* env, jobject /*thiz*/,
+                                                     jlong handle, jintArray out) {
     auto* engine = engineFrom(handle);
-    if (engine == nullptr) {
-        return 0;
-    }
-    return static_cast<jlong>(engine->framesRendered());
-}
+    if (out == nullptr) return;
+    const jsize size = env->GetArrayLength(out);
+    if (size < kInfoSize) return;
 
-JNIEXPORT jint JNICALL
-Java_com_kukosin_app_audio_AudioEngine_nativeGetSharingMode(JNIEnv* /*env*/, jobject /*thiz*/,
-                                                            jlong handle) {
-    auto* engine = engineFrom(handle);
-    if (engine == nullptr) {
-        return 0;
+    jint values[kInfoSize] = {-1, -1, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 100, -1, 0, 0};
+    if (engine != nullptr) {
+        const audio::StreamInfo info = engine->info();
+        values[0] = info.api;
+        values[1] = info.format;
+        values[2] = info.sampleRate;
+        values[3] = info.channels;
+        values[4] = info.framesPerBurst;
+        values[5] = info.bufferFrames;
+        values[6] = info.deviceId;
+        values[7] = info.xRuns;
+        values[8] = info.exclusive ? 1 : 0;
+        values[9] = info.bitPerfect ? 1 : 0;
+        values[10] = info.passthrough ? 1 : 0;
+        values[11] = info.errorCode;
+        values[12] = info.volumePercent;
+        values[13] = info.sourceFormat;
+        values[14] = info.sourceSampleRate;
+        values[15] = info.sourceChannels;
     }
-    return engine->actualSharingMode() == oboe::SharingMode::Exclusive ? 1 : 0;
-}
-
-JNIEXPORT jint JNICALL
-Java_com_kukosin_app_audio_AudioEngine_nativeGetActualDeviceId(JNIEnv* /*env*/, jobject /*thiz*/,
-                                                               jlong handle) {
-    auto* engine = engineFrom(handle);
-    if (engine == nullptr) {
-        return 0;
-    }
-    return engine->actualDeviceId();
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_kukosin_app_audio_AudioEngine_nativeGetOpenedBitPerfect(JNIEnv* /*env*/, jobject /*thiz*/,
-                                                                 jlong handle) {
-    auto* engine = engineFrom(handle);
-    if (engine == nullptr) {
-        return JNI_FALSE;
-    }
-    return engine->openedBitPerfect() ? JNI_TRUE : JNI_FALSE;
+    env->SetIntArrayRegion(out, 0, kInfoSize, values);
 }
 
 } // extern "C"

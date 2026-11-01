@@ -1,49 +1,36 @@
 package com.kukosin.app.audio
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 
 /**
- * Stable protocol mirrored in native code (native-lib.cpp). Do not reorder
- * the enum codes without updating the JNI mapping.
+ * Protocolo entero compartido con `native-lib.cpp`. No reordenar los códigos.
  */
-enum class AudioDriver(val code: Int) {
-    AAUDIO(0),
-    OPENSL_ES(1),
-    AUTO(-1),
+enum class PcmFormat(val code: Int, val bits: Int, val label: String) {
+    INT16(0, 16, "16-bit"),
+    INT24(1, 24, "24-bit"),
+    FLOAT32(2, 32, "32-bit float"),
+    INT32(3, 32, "32-bit int");
+
+    companion object {
+        fun fromCode(code: Int): PcmFormat = when (code) {
+            0 -> INT16
+            1 -> INT24
+            2 -> FLOAT32
+            3 -> INT32
+            else -> INT16
+        }
+
+        fun fromMedia3Encoding(encoding: Int): PcmFormat = when (encoding) {
+            androidx.media3.common.C.ENCODING_PCM_16BIT -> INT16
+            androidx.media3.common.C.ENCODING_PCM_24BIT -> INT24
+            androidx.media3.common.C.ENCODING_PCM_32BIT -> INT32
+            androidx.media3.common.C.ENCODING_PCM_FLOAT -> FLOAT32
+            else -> INT16
+        }
+    }
 }
 
-enum class PcmFormat(val code: Int) {
-    INT16(0),
-    INT24(1),
-    FLOAT32(2),
-    INT32(3),
-}
-
-enum class SharingMode(val code: Int) {
-    SHARED(0),
-    EXCLUSIVE(1),
-}
-
-enum class PerformanceMode(val code: Int) {
-    NONE(0),
-    POWER_SAVING(1),
-    LOW_LATENCY(2),
-}
-
-enum class SourceMode(val code: Int) {
-    TONE(0),
-    PCM(1),
-}
-
-/** Native output path: direct controller, integrated exclusive AAudio, USB DAC. */
-enum class OutputPath(val code: Int) {
-    DIRECT(0),
-    INTEGRATED_EXCLUSIVE(1),
-    USB_DAC(2),
-}
-
+/** Estado del stream de Oboe (espejo de oboe::StreamState). */
 enum class EngineState(val code: Int) {
     UNINITIALIZED(0),
     UNKNOWN(1),
@@ -65,19 +52,22 @@ enum class EngineState(val code: Int) {
     }
 }
 
-/** Mirrors oboe::Result. Unknown/unmatched values fall back to UNKNOWN. */
+/** Espejo de oboe::Result. */
 enum class NativeResult(val code: Int, val description: String) {
     OK(0, "OK"),
     ERROR_DISCONNECTED(-899, "Dispositivo desconectado"),
     ERROR_ILLEGAL_ARGUMENT(-898, "Argumento inválido"),
     ERROR_INVALID_STATE(-895, "Estado inválido"),
-    ERROR_UNAVAILABLE(-892, "No disponible"),
+    ERROR_UNAVAILABLE(-892, "Formato/rate no disponible en el dispositivo"),
     ERROR_NO_MEMORY(-890, "Sin memoria"),
     ERROR_INVALID_FORMAT(-886, "Formato no soportado"),
     ERROR_OUT_OF_RANGE(-885, "Fuera de rango"),
-    ERROR_INVALID_RATE(-883, "Sample rate no soportado"),
+    ERROR_INVALID_RATE(-883, "Frecuencia de muestreo no soportada"),
     ERROR_CLOSED(-882, "Stream cerrado"),
+    ERROR_NULL(-889, "Motor no inicializado"),
     UNKNOWN(Int.MIN_VALUE, "Error desconocido");
+
+    val isOk: Boolean get() = code == 0
 
     companion object {
         fun fromCode(code: Int): NativeResult =
@@ -85,154 +75,230 @@ enum class NativeResult(val code: Int, val description: String) {
     }
 }
 
+/** Lo que pide la app: el formato real de la pista ya decodificada. */
 data class AudioEngineConfig(
-    val driver: AudioDriver = AudioDriver.AAUDIO,
-    val format: PcmFormat = PcmFormat.INT16,
-    val sampleRateHz: Int = 0,
-    val channelCount: Int = 2,
-    val sharingMode: SharingMode = SharingMode.EXCLUSIVE,
-    val performanceMode: PerformanceMode = PerformanceMode.NONE,
+    val sourceFormat: PcmFormat = PcmFormat.INT16,
+    val sourceSampleRate: Int = 48_000,
+    val sourceChannels: Int = 2,
+    /** Id del [android.media.AudioDeviceInfo] al que queremos salir (0 = predeterminado). */
     val deviceId: Int = 0,
-    val bitPerfect: Boolean = true,
-    val outputPath: OutputPath = OutputPath.DIRECT,
+    /** Si es true, el motor no acepta conversión: o es exacto, o falla. */
+    val strictBitPerfect: Boolean = true,
+    /** Si es true, no se acepta un stream compartido (modos exclusivos). */
+    val requireExclusive: Boolean = false,
+    /** Objetivo de buffer en milisegundos (estabilidad). */
+    val bufferMs: Int = 250,
+    /** Fundido de entrada (25 ms) y de salida (60 ms) para no chasquear al play/pausa. */
+    val fades: Boolean = true,
 )
 
+/** Lo que devolvió el hardware, tal cual. */
+data class EngineInfo(
+    val opened: Boolean = false,
+    val apiCode: Int = -1,
+    val source: PcmFormat = PcmFormat.INT16,
+    val sourceSampleRate: Int = 0,
+    val sourceChannels: Int = 2,
+    val stream: PcmFormat? = null,
+    val streamSampleRate: Int = 0,
+    val streamChannels: Int = 0,
+    val framesPerBurst: Int = 0,
+    val bufferFrames: Int = 0,
+    val deviceId: Int = 0,
+    val xRuns: Int = -1,
+    val exclusive: Boolean = false,
+    val passthrough: Boolean = false,
+    val volumePercent: Int = 100,
+    val errorCode: Int = 0,
+) {
+    val apiLabel: String
+        get() = when (apiCode) {
+            0 -> "AAudio"
+            1 -> "OpenSL ES"
+            else -> "—"
+        }
+
+    /** Latencia aproximada del buffer (lo que se acumula antes de llegar al DAC). */
+    val bufferMs: Double
+        get() = if (streamSampleRate > 0) bufferFrames * 1000.0 / streamSampleRate else 0.0
+
+    /** Bit-perfect real: exclusivo, sin conversión y sin atenuación digital. */
+    val bitPerfect: Boolean
+        get() = opened && exclusive && passthrough && volumePercent >= 100
+
+    val converted: Boolean get() = opened && !passthrough
+
+    /** Texto corto para la UI: "24-bit · 96 kHz · exclusivo". */
+    val streamLabel: String
+        get() {
+            val fmt = stream ?: return "—"
+            val sharing = if (exclusive) "exclusivo" else "compartido"
+            return "${fmt.bits}-bit · ${(streamSampleRate / 1000.0).format(1)} kHz · $sharing"
+        }
+}
+
+private fun Double.format(decimals: Int): String =
+    String.format(java.util.Locale.US, "%.${decimals}f", this)
+
 /**
- * JNI bridge to the C++ [audio::AudioEngine]. Holds a single native handle
- * and never touches raw audio buffers on the Kotlin side: PCM is forwarded as
- * packed bytes into the engine's ring buffer.
+ * Puente JNI al motor nativo ([audio::AudioEngine] en C++).
  *
- * All state changes should be called off the main thread (see
- * [configureAndStart] for a coroutine helper).
+ * Un [AudioEngine] = un stream de Oboe = un formato. Si la pista cambia de rate o
+ * de profundidad, Media3 reconstruye el sink y se crea un motor nuevo: es el
+ * precio de no resamplear.
  */
 class AudioEngine : AutoCloseable {
 
+    private val lock = Any()
+
+    @Volatile
     private var handle: Long = nativeCreate()
+
+    private val infoBuffer = IntArray(INFO_SIZE)
 
     init {
         require(handle != 0L) { "No se pudo crear el motor de audio nativo" }
     }
 
-    val state: EngineState get() = EngineState.fromCode(nativeGetState(handle))
-
-    val actualSampleRate: Int get() = nativeGetActualSampleRate(handle)
-
-    val actualFormat: PcmFormat get() = when (nativeGetActualFormat(handle)) {
-        0 -> PcmFormat.INT16
-        1 -> PcmFormat.INT24
-        3 -> PcmFormat.INT32
-        else -> PcmFormat.FLOAT32
+    /**
+     * El motor lo cierra el hilo de audio de Media3 mientras la UI puede estar
+     * leyendo el estado: sin este candado habría un use-after-free en JNI.
+     */
+    private inline fun <T> withHandle(default: T, block: (Long) -> T): T = synchronized(lock) {
+        val current = handle
+        if (current == 0L) default else block(current)
     }
 
-    val framesPerBurst: Int get() = nativeGetFramesPerBurst(handle)
+    val state: EngineState
+        get() = withHandle(EngineState.UNINITIALIZED) { EngineState.fromCode(nativeGetState(it)) }
 
-    val actualSharingMode: SharingMode
-        get() = if (nativeGetSharingMode(handle) == 1) SharingMode.EXCLUSIVE else SharingMode.SHARED
+    val isOpen: Boolean get() = info().opened
 
-    val actualDeviceId: Int get() = nativeGetActualDeviceId(handle)
-
-    val openedBitPerfect: Boolean get() = nativeGetOpenedBitPerfect(handle)
-
-    /** Total frames rendered by the audio callback, reset on open/flush. */
-    val positionFrames: Long get() = nativeGetPositionFrames(handle)
-
-    fun configure(config: AudioEngineConfig): NativeResult = NativeResult.fromCode(
-        nativeConfigure(
-            handle,
-            config.driver.code,
-            config.format.code,
-            config.sampleRateHz,
-            config.channelCount,
-            config.sharingMode.code,
-            config.performanceMode.code,
-            config.deviceId,
-            config.bitPerfect,
-            config.outputPath.code,
-        ),
-    )
-
-    fun start(): NativeResult = NativeResult.fromCode(nativeStart(handle))
-
-    fun stop(): NativeResult = NativeResult.fromCode(nativeStop(handle))
-
-    fun pause(): NativeResult = NativeResult.fromCode(nativePause(handle))
-
-    fun flush(): NativeResult = NativeResult.fromCode(nativeFlush(handle))
-
-    fun setVolume(volume: Float) = nativeSetVolume(handle, volume.coerceIn(0f, 1f))
-
-    fun setSourceMode(mode: SourceMode) = nativeSetSourceMode(handle, mode.code)
-
-    /** Pushes interleaved float PCM. Returns the number of samples accepted. */
-    fun writePcm(samples: FloatArray): Int = nativeWritePcm(handle, samples, samples.size)
+    /** Frames de origen que ya salieron por el DAC (para la posición del player). */
+    val sourceFramesRendered: Long get() = withHandle(0L) { nativeGetSourceFrames(it) }
 
     /**
-     * Bit-perfect packed PCM from a direct [ByteBuffer]. Advances nothing;
-     * the caller must update [ByteBuffer.position] by the returned byte count.
+     * Abre el stream. Bloqueante (~5-40 ms): llamar fuera del hilo principal.
+     * Intenta primero exacto + exclusivo; si no se puede y [AudioEngineConfig.strictBitPerfect]
+     * es false, busca un fallback con conversión propia.
+     */
+    fun configure(config: AudioEngineConfig): NativeResult = withHandle(NativeResult.ERROR_NULL) { h ->
+        NativeResult.fromCode(
+            nativeConfigure(
+                h,
+                config.sourceFormat.code,
+                config.sourceSampleRate,
+                config.sourceChannels,
+                config.deviceId,
+                config.strictBitPerfect,
+                config.requireExclusive,
+                config.bufferMs,
+                config.fades,
+            ),
+        )
+    }
+
+    /**
+     * Último error nativo (0 = ninguno). Se consulta sólo cuando una escritura no entra:
+     * así el sink puede fallar y reconstruirse en vez de quedarse esperando para siempre.
+     */
+    fun errorCode(): Int = withHandle(0) { h -> nativeErrorCode(h) }
+
+    fun start(): NativeResult = withHandle(NativeResult.ERROR_NULL) { NativeResult.fromCode(nativeStart(it)) }
+
+    fun stop(): NativeResult = withHandle(NativeResult.ERROR_NULL) { NativeResult.fromCode(nativeStop(it)) }
+
+    fun pause(): NativeResult = withHandle(NativeResult.ERROR_NULL) { NativeResult.fromCode(nativePause(it)) }
+
+    fun flush(): NativeResult = withHandle(NativeResult.ERROR_NULL) { NativeResult.fromCode(nativeFlush(it)) }
+
+    /** Volumen 0..1. A 1.0 el camino es bit-perfect; por debajo se atenúa. */
+    fun setVolume(volume: Float) = withHandle(Unit) {
+        nativeSetVolume(it, volume.coerceIn(0f, 1f))
+    }
+
+    /**
+     * Escribe PCM ya decodificado. Devuelve los bytes de [buffer] aceptados
+     * (0 = el ring está lleno, reintentar). Nunca bloquea.
      */
     fun writePacked(buffer: ByteBuffer): Int {
         val remaining = buffer.remaining()
         if (remaining <= 0) return 0
-        if (!buffer.isDirect) {
-            val copy = ByteArray(remaining)
-            val pos = buffer.position()
-            buffer.get(copy)
-            buffer.position(pos)
-            val tmp = ByteBuffer.allocateDirect(remaining)
-            tmp.put(copy)
-            return nativeWritePacked(handle, tmp, 0, remaining)
+        return withHandle(0) { h ->
+            if (buffer.isDirect) {
+                nativeWritePacked(h, buffer, buffer.position(), remaining).coerceIn(0, remaining)
+            } else {
+                val copy = ByteArray(remaining)
+                val position = buffer.position()
+                buffer.get(copy, 0, remaining)
+                buffer.position(position)
+                val direct = ByteBuffer.allocateDirect(remaining)
+                direct.put(copy).flip()
+                nativeWritePacked(h, direct, 0, remaining).coerceIn(0, remaining)
+            }
         }
-        return nativeWritePacked(handle, buffer, buffer.position(), remaining)
     }
 
-    /** Opens the stream and starts playback on a background dispatcher. */
-    suspend fun configureAndStart(config: AudioEngineConfig): NativeResult =
-        withContext(Dispatchers.Default) {
-            val openResult = configure(config)
-            if (openResult.code != NativeResult.OK.code) return@withContext openResult
-            start()
-        }
+    fun info(): EngineInfo = withHandle(EngineInfo()) { h ->
+        nativeGetInfo(h, infoBuffer)
+        val open = infoBuffer[0] >= 0
+        return EngineInfo(
+            opened = open,
+            apiCode = infoBuffer[0],
+            stream = if (open && infoBuffer[1] >= 0) PcmFormat.fromCode(infoBuffer[1]) else null,
+            streamSampleRate = infoBuffer[2],
+            streamChannels = infoBuffer[3],
+            framesPerBurst = infoBuffer[4],
+            bufferFrames = infoBuffer[5],
+            deviceId = infoBuffer[6],
+            xRuns = infoBuffer[7],
+            exclusive = infoBuffer[8] == 1,
+            passthrough = infoBuffer[10] == 1,
+            errorCode = infoBuffer[11],
+            volumePercent = infoBuffer[12],
+            source = PcmFormat.fromCode(infoBuffer[13]),
+            sourceSampleRate = infoBuffer[14],
+            sourceChannels = infoBuffer[15],
+        )
+    }
 
     override fun close() {
-        if (handle != 0L) {
-            nativeDelete(handle)
-            handle = 0L
+        synchronized(lock) {
+            val current = handle
+            if (current != 0L) {
+                handle = 0L
+                nativeDelete(current)
+            }
         }
     }
 
-    // --- native interface ---
     private external fun nativeCreate(): Long
     private external fun nativeDelete(handle: Long)
     private external fun nativeConfigure(
         handle: Long,
-        api: Int,
         format: Int,
         sampleRate: Int,
         channelCount: Int,
-        sharingMode: Int,
-        performanceMode: Int,
         deviceId: Int,
-        bitPerfect: Boolean,
-        outputPath: Int,
+        strictBitPerfect: Boolean,
+        requireExclusive: Boolean,
+        bufferMs: Int,
+        fades: Boolean,
     ): Int
     private external fun nativeStart(handle: Long): Int
     private external fun nativeStop(handle: Long): Int
     private external fun nativePause(handle: Long): Int
     private external fun nativeFlush(handle: Long): Int
     private external fun nativeSetVolume(handle: Long, volume: Float)
-    private external fun nativeSetSourceMode(handle: Long, mode: Int)
-    private external fun nativeWritePcm(handle: Long, samples: FloatArray, sampleCount: Int): Int
     private external fun nativeWritePacked(handle: Long, buffer: ByteBuffer, offset: Int, length: Int): Int
+    private external fun nativeErrorCode(handle: Long): Int
     private external fun nativeGetState(handle: Long): Int
-    private external fun nativeGetActualSampleRate(handle: Long): Int
-    private external fun nativeGetActualFormat(handle: Long): Int
-    private external fun nativeGetFramesPerBurst(handle: Long): Int
-    private external fun nativeGetPositionFrames(handle: Long): Long
-    private external fun nativeGetSharingMode(handle: Long): Int
-    private external fun nativeGetActualDeviceId(handle: Long): Int
-    private external fun nativeGetOpenedBitPerfect(handle: Long): Boolean
+    private external fun nativeGetSourceFrames(handle: Long): Long
+    private external fun nativeGetInfo(handle: Long, out: IntArray)
 
-    companion object {
+    private companion object {
+        const val INFO_SIZE = 16
+
         init {
             System.loadLibrary("audioengine")
         }

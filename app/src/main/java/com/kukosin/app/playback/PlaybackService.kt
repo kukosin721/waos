@@ -6,6 +6,7 @@ import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
@@ -17,12 +18,17 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.kukosin.app.audio.AudioEngineStatus
 import com.kukosin.app.data.LibraryInsights
 import com.kukosin.app.data.ytm.YtmService
 import com.kukosin.app.data.ytm.describeYtmError
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -67,11 +73,49 @@ class PlaybackService : MediaSessionService() {
         AudioSettingsManager.init(this)
         recreatePlayer()
 
+        // Sólo se reconstruye el player si cambió algo que afecta al AUDIO. Antes se
+        // recreaba con cualquier ajuste (incluso el aspecto de la cola) y eso cortaba la
+        // reproducción sin motivo. El `drop(1)` descarta el valor inicial del StateFlow.
         settingsJob = AudioSettingsManager.configState
-            .onEach {
-                recreatePlayer()
-            }
+            .drop(1)
+            .map { it.audioSignature }
+            .distinctUntilChanged()
+            .onEach { recreatePlayer() }
             .launchIn(serviceScope)
+    }
+
+    private var audioRetries: Int = 0
+    private var retryJob: Job? = null
+
+    /**
+     * Recuperación de la salida de audio: DAC desenchufado a mitad de tema, stream exclusivo
+     * rechazado por el HAL o modo "DAC USB" sin DAC. Se reconstruye el player una vez,
+     * conservando pista y posición (`recreatePlayer` ya guarda el snapshot).
+     */
+    private val audioErrorListener = object : Player.Listener {
+        override fun onPlayerError(error: PlaybackException) {
+            // 5000..5099 = familia ERROR_CODE_*_AUDIO_*. Se compara por rango para no
+            // depender de constantes que cambian de nombre entre versiones de Media3.
+            val audioSinkFailure = error.errorCode in 5000..5099
+            AudioEngineStatus.error(
+                if (audioSinkFailure) {
+                    "Falló la salida de audio (${error.errorCode}). Reintentando con la ruta actual…"
+                } else {
+                    "Error de reproducción (${error.errorCode}): ${error.message ?: "sin detalle"}"
+                },
+            )
+            if (!audioSinkFailure || audioRetries >= 1) return
+            audioRetries++
+            retryJob?.cancel()
+            retryJob = serviceScope.launch {
+                delay(300)
+                if ((player?.mediaItemCount ?: 0) > 0) recreatePlayer()
+            }
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying) audioRetries = 0
+        }
     }
 
     private fun recreatePlayer() {
@@ -107,6 +151,7 @@ class PlaybackService : MediaSessionService() {
         AudioRoute.attach(this, newPlayer)
         newPlayer.addListener(prefetchListener)
         newPlayer.addListener(playbackCountListener)
+        newPlayer.addListener(audioErrorListener)
         mediaSession = MediaSession.Builder(this, newPlayer).build()
         player = newPlayer
 
@@ -193,6 +238,8 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         settingsJob?.cancel()
+        retryJob?.cancel()
+        player?.removeListener(audioErrorListener)
         player?.removeListener(prefetchListener)
         player?.removeListener(playbackCountListener)
         AudioRoute.detach()
