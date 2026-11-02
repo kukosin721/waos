@@ -13,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +33,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -49,6 +51,9 @@ import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.Lyrics
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Info
@@ -65,11 +70,11 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.rememberTransition
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.AnimatedVisibility
@@ -206,7 +211,27 @@ internal fun SearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     autoFocus: Boolean = false,
+    /** Ofrece buscar también dentro de la letra de cada canción. */
+    lyricsOnly: Boolean = false,
+    onToggleLyrics: (() -> Unit)? = null,
+    /** Letras ya indexadas (0 = todavía no se indexó ninguna). */
+    lyricsIndexed: Int = 0,
+    lyricsIndexing: Boolean = false,
 ) {
+    // `true` mientras el campo se desplaza horizontalmente (ver `LaunchedEffect` abajo).
+    var scrollDragging by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+    // El arrastre termina cuando el valor deja de cambiar durante 120 ms: al soltar se
+    // resincroniza el texto con lo que realmente quedó en el campo.
+    LaunchedEffect(scrollState.value) {
+        scrollDragging = true
+        delay(120)
+        scrollDragging = false
+    }
+    // El texto que se escribe es estado LOCAL: la consulta del ViewModel va con debounce,
+    // así escribir rápido no re-filtra la biblioteca en cada tecla (eso era lo que hacía
+    // que el buscador se sintiera trabado con bibliotecas grandes).
+    var draft by remember(query) { mutableStateOf(query) }
     // La búsqueda pide foco (y teclado) al abrirse sólo en la pantalla de búsqueda:
     // en las listas, el campo es un filtro y no queremos que salte el teclado solo.
     val focusRequester = remember { FocusRequester() }
@@ -218,17 +243,33 @@ internal fun SearchField(
         }
     }
     OutlinedTextField(
-        value = query,
-        onValueChange = onQueryChange,
+        value = draft,
+        // El campo comparte desplazamiento horizontal con la barra de scroll: al arrastrar
+        // la barra, Compose mueve el cursor y reescribe el valor, y los caracteres se
+        // "desplazaban" solos. Mientras se arrastra se ignora ese cambio; el texto se
+        // sincroniza al soltar.
+        onValueChange = { value ->
+            if (!scrollDragging) {
+                draft = value
+                onQueryChange(value)
+            }
+        },
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 24.dp, vertical = 8.dp)
             .focusRequester(focusRequester),
-        placeholder = { Text("Search song, artist, album or format") },
+        placeholder = {
+            Text(
+                if (lyricsOnly) "Search inside the lyrics…" else "Search song, artist, album or format",
+            )
+        },
         leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = CreamMuted) },
-        trailingIcon = if (query.isNotEmpty()) {
+        trailingIcon = if (draft.isNotEmpty()) {
             {
-                IconButton(onClick = { onQueryChange("") }) {
+                IconButton(onClick = {
+                    draft = ""
+                    onQueryChange("")
+                }) {
                     Icon(Icons.Rounded.Close, contentDescription = "Clear search", tint = CreamMuted)
                 }
             }
@@ -247,6 +288,46 @@ internal fun SearchField(
             cursorColor = Gold,
         ),
     )
+    if (onToggleLyrics != null) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterChip(
+                selected = lyricsOnly,
+                onClick = onToggleLyrics,
+                label = { Text("Lyrics", fontWeight = FontWeight.Bold) },
+                leadingIcon = {
+                    Icon(
+                        Icons.Rounded.Lyrics,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Gold,
+                    selectedLabelColor = Ink,
+                    selectedLeadingIconColor = Ink,
+                    containerColor = InkSoft,
+                    labelColor = Cream,
+                    iconColor = Gold,
+                ),
+            )
+            Text(
+                when {
+                    lyricsIndexing -> "Indexing lyrics… ${lyricsIndexed} songs"
+                    lyricsOnly && lyricsIndexed == 0 -> "No lyrics indexed yet"
+                    lyricsOnly -> "$lyricsIndexed songs with lyrics indexed"
+                    else -> "Search inside the lyrics, without accents"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = CreamMuted,
+            )
+        }
+    }
 }
 
 @Composable
@@ -327,12 +408,14 @@ internal fun YtmView(
                     )
                 }
             }
-            items(ytmTracks, key = { it.id }) { track ->
-                YtmTrackRow(
-                    track = track,
-                    isPlaying = track.id == playingVideoId && isPlaying,
-                    onClick = { onTrackClick(track) },
-                )
+            itemsIndexed(ytmTracks, key = { _, t -> t.id }) { index, track ->
+                RevealItem(index = index, contentKey = track.id) {
+                        YtmTrackRow(
+                            track = track,
+                            isPlaying = track.id == playingVideoId && isPlaying,
+                            onClick = { onTrackClick(track) },
+                        )
+                }
             }
         }
     }
@@ -520,20 +603,27 @@ internal fun TrackList(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             itemsIndexed(tracks, key = { _, track -> track.uri.toString() }) { index, track ->
-                // Con animateItem, filtrar o cambiar el orden desplaza las filas en
-                // vez de hacerlas saltar de golpe.
+                // Dos animaciones distintas, y las dos importan:
+                //
+                //  - `animateItem()` mueve la fila cuando la lista se reordena o se
+                //    filtra, en vez de que el contenido salte de golpe.
+                //  - `RevealItem` hace que la fila entre desde abajo, escalonada. Como el
+                //    estado vive en el ítem, cada fila que aparece al scrollear se vuelve a
+                //    acomodar sola: la lista "respira" mientras la recorrés.
                 Box(modifier = Modifier.animateItem()) {
-                    TrackRow(
-                        track = track,
-                        selected = track.uri == currentUri,
-                        isPlaying = isPlaying && track.uri == currentUri,
-                        controller = controller,
-                        onClick = { onTrackClick(index) },
-                        onInspect = { onInspectClick(track) },
-                        onMessage = onMessage,
-                        extraLabel = extraLabel?.invoke(track),
-                        highlighted = focusUri != null && track.uri == focusUri,
-                    )
+                    RevealItem(index = index, contentKey = track.uri) {
+                        TrackRow(
+                            track = track,
+                            selected = track.uri == currentUri,
+                            isPlaying = isPlaying && track.uri == currentUri,
+                            controller = controller,
+                            onClick = { onTrackClick(index) },
+                            onInspect = { onInspectClick(track) },
+                            onMessage = onMessage,
+                            extraLabel = extraLabel?.invoke(track),
+                            highlighted = focusUri != null && track.uri == focusUri,
+                        )
+                    }
                 }
             }
         }
@@ -579,6 +669,9 @@ internal fun TrackRow(
     var showMenu by remember { mutableStateOf(false) }
     var swipeHandled by remember { mutableStateOf(false) }
     var artworkDragX by remember { mutableFloatStateOf(0f) }
+    // Feedback de toque: la fila se hunde un 1,5 % (casi imperceptible, pero el dedo lo
+    // registra) mientras está presionada. Antes sólo había ripple del sistema.
+    val rowInteraction = remember { MutableInteractionSource() }
 
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
@@ -618,7 +711,7 @@ internal fun TrackRow(
 
     val artworkAlpha by animateFloatAsState(
         targetValue = if (artworkDragX > 0f) (1f - (artworkDragX / 90f).coerceIn(0f, 1f)) else 1f,
-        animationSpec = tween(150),
+        animationSpec = Motion.quick(),
         label = "artworkDragAlpha",
     )
 
@@ -626,7 +719,7 @@ internal fun TrackRow(
     // par de segundos para que la encuentres de un vistazo.
     val highlightAlpha by animateFloatAsState(
         targetValue = if (highlighted) 0.20f else 0f,
-        animationSpec = tween(durationMillis = 260),
+        animationSpec = Motion.enter(Motion.EXIT_MS + 40),
         label = "rowHighlight",
     )
 
@@ -658,7 +751,12 @@ internal fun TrackRow(
                     .clip(RoundedCornerShape(18.dp))
                     .background(if (selected) InkSoft else Ink.copy(alpha = 0f))
                     .background(Gold.copy(alpha = highlightAlpha))
-                    .clickable(onClick = onClick)
+                    .pressScale(rowInteraction, scale = 0.985f)
+                    .clickable(
+                        interactionSource = rowInteraction,
+                        indication = LocalIndication.current,
+                        onClick = onClick,
+                    )
                     .padding(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -769,19 +867,23 @@ internal fun AlbumView(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        items(albums, key = { it.name + "_" + it.artist }) { album ->
-            AlbumCard(album = album, onClick = { onAlbumClick(album) })
+        itemsIndexed(albums, key = { _, album -> album.name + "_" + album.artist }) { index, album ->
+            RevealItem(index = index, contentKey = album.name + "_" + album.artist) {
+                    AlbumCard(album = album, onClick = { onAlbumClick(album) })
+            }
         }
     }
 }
 
 @Composable
 internal fun AlbumCard(album: AlbumGroup, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(16.dp))
             .background(InkSoft)
-            .clickable(onClick = onClick)
+            .pressScale(interaction, scale = 0.96f)
+            .clickable(interactionSource = interaction, indication = LocalIndication.current, onClick = onClick)
             .padding(10.dp),
     ) {
         Box(
@@ -858,20 +960,24 @@ internal fun ArtistView(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = bottomPadding.dp, top = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(artists, key = { it.name }) { artist ->
-            ArtistRow(artist = artist, onClick = { onArtistClick(artist) })
+        itemsIndexed(artists, key = { _, artist -> artist.name }) { index, artist ->
+            RevealItem(index = index, contentKey = artist.name) {
+                    ArtistRow(artist = artist, onClick = { onArtistClick(artist) })
+            }
         }
     }
 }
 
 @Composable
 internal fun ArtistRow(artist: ArtistGroup, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(InkSoft)
-            .clickable(onClick = onClick)
+            .pressScale(interaction, scale = 0.98f)
+            .clickable(interactionSource = interaction, indication = LocalIndication.current, onClick = onClick)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -946,20 +1052,24 @@ internal fun FolderBrowserView(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = bottomPadding.dp, top = 4.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            items(currentFolder.subfolders, key = { it.path }) { subfolder ->
-                FolderRow(folder = subfolder, onClick = { onFolderClick(subfolder) })
+            itemsIndexed(currentFolder.subfolders, key = { _, f -> f.path }) { index, subfolder ->
+                RevealItem(index = index, contentKey = subfolder.path) {
+                        FolderRow(folder = subfolder, onClick = { onFolderClick(subfolder) })
+                }
             }
 
             itemsIndexed(currentFolder.tracks, key = { _, track -> track.uri.toString() }) { index, track ->
-                TrackRow(
-                    track = track,
-                    selected = track.uri == currentUri,
-                    isPlaying = isPlaying && track.uri == currentUri,
-                    controller = controller,
-                    onClick = { onTrackClick(currentFolder.tracks, index) },
-                    onInspect = { onInspectClick(track) },
-                    onMessage = onMessage,
-                )
+                RevealItem(index = index, contentKey = track.uri) {
+                        TrackRow(
+                            track = track,
+                            selected = track.uri == currentUri,
+                            isPlaying = isPlaying && track.uri == currentUri,
+                            controller = controller,
+                            onClick = { onTrackClick(currentFolder.tracks, index) },
+                            onInspect = { onInspectClick(track) },
+                            onMessage = onMessage,
+                        )
+                }
             }
         }
     }
@@ -967,12 +1077,14 @@ internal fun FolderBrowserView(
 
 @Composable
 internal fun FolderRow(folder: FolderNode, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(InkSoft)
-            .clickable(onClick = onClick)
+            .pressScale(interaction, scale = 0.98f)
+            .clickable(interactionSource = interaction, indication = LocalIndication.current, onClick = onClick)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

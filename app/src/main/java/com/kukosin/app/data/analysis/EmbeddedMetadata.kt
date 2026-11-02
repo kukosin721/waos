@@ -35,6 +35,44 @@ data class TagSnapshot(
 )
 
 internal object EmbeddedMetadata {
+    /**
+     * Extrae **sólo** las letras, sin volcar etiquetas ni abrir
+     * `MediaMetadataRetriever`. Es la ruta rápida que usa [LyricsIndex] al indexar la
+     * biblioteca para la búsqueda por letra: cuesta una fracción de [extract].
+     */
+    fun extractLyrics(context: Context, uri: Uri, filePath: String): EmbeddedLyrics? {
+        var lyrics: EmbeddedLyrics? = null
+        runCatching {
+            openStream(context, uri, filePath)?.use { raw ->
+                val input = BufferedInputStream(raw, 64 * 1024)
+                input.mark(1024 * 1024)
+                val header = ByteArray(12)
+                val read = input.read(header)
+                input.reset()
+                if (read >= 3 && header.copyOf(3).decodeToString() == "ID3") {
+                    lyrics = parseId3Only(input)
+                } else if (read >= 4 && header.copyOf(4).decodeToString() == "fLaC") {
+                    input.skip(4)
+                    lyrics = parseFlacFromBlockStart(input, LinkedHashMap())?.let { it }
+                } else if (read >= 4 && header.copyOf(4).decodeToString() == "OggS") {
+                    lyrics = parseOggComments(input, LinkedHashMap())
+                } else {
+                    lyrics = scanMp4Lyrics(input, LinkedHashMap())
+                }
+            }
+        }
+        return lyrics
+    }
+
+    /**
+     * ID3 hasta encontrar USLT/SYLT. Se detiene en cuanto tiene letras en vez de
+     * recorrer todos los frames (y no arma el mapa de etiquetas).
+     */
+    private fun parseId3Only(input: InputStream): EmbeddedLyrics? {
+        val fields = LinkedHashMap<String, String>()
+        return parseId3(input, fields)
+    }
+
     fun extract(context: Context, uri: Uri, filePath: String): TagSnapshot {
         val fields = LinkedHashMap<String, String>()
         dumpRetriever(context, uri, fields)
@@ -109,6 +147,9 @@ internal object EmbeddedMetadata {
     }
 
     private fun parseId3(input: InputStream, fields: MutableMap<String, String>): EmbeddedLyrics? {
+        // La ruta "sólo letras" pasa un mapa descartable: si ya hay SYLT (sincronizada),
+        // no hace falta seguir leyendo el resto del tag.
+
         val header = ByteArray(10)
         if (input.read(header) != 10) return null
         if (header.copyOf(3).decodeToString() != "ID3") return null

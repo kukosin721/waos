@@ -60,7 +60,9 @@ object BiquadDesign {
         gainDb: Double,
         out: DoubleArray,
     ): Boolean {
-        if (abs(gainDb) < 1e-3) {
+        // Sólo las bandas de ganancia pueden quedar inactivas por ganancia nula: un
+        // notch o un pasa-altos actúan aunque su gainDb sea 0.
+        if (type.usesGain && abs(gainDb) < 1e-3) {
             out[0] = 1.0
             out[1] = 0.0
             out[2] = 0.0
@@ -70,13 +72,46 @@ object BiquadDesign {
         }
         val fs = safeFs(sampleRate)
         val f0 = clampFreq(freqHz, fs)
+        val safeQ = if (q.isFinite()) q.coerceIn(0.05, 40.0) else 1.41
         val a = 10.0.pow(gainDb.coerceIn(-MAX_GAIN, MAX_GAIN) / 40.0)
         val w0 = 2.0 * PI * f0 / fs
         val cosW = cos(w0)
         val sinW = sin(w0)
+        // Notch, pasa-bajos y pasa-altos no dependen de la ganancia: son filtros de
+        // corte (útiles para eliminar un zumbido de 50/60 Hz o un siseo).
         when (type) {
+            EqBandType.NOTCH -> {
+                val alpha = sinW / (2.0 * safeQ)
+                val a0 = 1.0 + alpha
+                out[0] = 1.0 / a0
+                out[1] = (-2.0 * cosW) / a0
+                out[2] = 1.0 / a0
+                out[3] = (-2.0 * cosW) / a0
+                out[4] = (1.0 - alpha) / a0
+                return true
+            }
+            EqBandType.LOW_PASS -> {
+                val alpha = sinW / (2.0 * safeQ)
+                val a0 = 1.0 + alpha
+                out[0] = ((1.0 - cosW) / 2.0) / a0
+                out[1] = (1.0 - cosW) / a0
+                out[2] = ((1.0 - cosW) / 2.0) / a0
+                out[3] = (-2.0 * cosW) / a0
+                out[4] = (1.0 - alpha) / a0
+                return true
+            }
+            EqBandType.HIGH_PASS -> {
+                val alpha = sinW / (2.0 * safeQ)
+                val a0 = 1.0 + alpha
+                out[0] = ((1.0 + cosW) / 2.0) / a0
+                out[1] = -(1.0 + cosW) / a0
+                out[2] = ((1.0 + cosW) / 2.0) / a0
+                out[3] = (-2.0 * cosW) / a0
+                out[4] = (1.0 - alpha) / a0
+                return true
+            }
             EqBandType.PEAK -> {
-                val alpha = sinW / (2.0 * q.coerceIn(0.05, 40.0))
+                val alpha = sinW / (2.0 * safeQ)
                 val a0 = 1.0 + alpha / a
                 out[0] = (1.0 + alpha * a) / a0
                 out[1] = (-2.0 * cosW) / a0
@@ -104,6 +139,18 @@ object BiquadDesign {
                 out[3] = 2.0 * ((a - 1.0) - (a + 1.0) * cosW) / a0
                 out[4] = ((a + 1.0) - (a - 1.0) * cosW - twoSqrtAAlpha) / a0
             }
+        }
+        // Si algún coeficiente no es finito, el filtro se declara inactivo en vez de
+        // propagar NaN a toda la cadena (un NaN en un biquad enmudece para siempre).
+        if (!out[0].isFinite() || !out[1].isFinite() || !out[2].isFinite() ||
+            !out[3].isFinite() || !out[4].isFinite()
+        ) {
+            out[0] = 1.0
+            out[1] = 0.0
+            out[2] = 0.0
+            out[3] = 0.0
+            out[4] = 0.0
+            return false
         }
         return true
     }
@@ -179,16 +226,22 @@ object BiquadDesign {
      * Se barre el espectro en pasos del 2 % (~250 puntos), con los biquads reales.
      */
     fun bandsPeakDb(bands: List<EqBand>, sampleRate: Double): Double {
+        val contributing = bands.filter {
+            it.isGainBand && it.gainDb.isFinite() && abs(it.gainDb) >= 0.05f
+        }
+        if (contributing.isEmpty()) return 0.0
         var peak = -120.0
-        var f = 20.0
-        while (f < 20_000.0) {
+        var f = MIN_FREQ
+        val top = minOf(20_000.0, safeFs(sampleRate) * 0.49)
+        // Rejilla logarítmica fina (pasos del 1 %, ~700 puntos de 10 Hz a 20 kHz): el pico
+        // de una campana estrecha no se puede pasar por alto entre dos muestras.
+        while (f < top) {
             var db = 0.0
-            for (band in bands) {
-                if (abs(band.gainDb) < 0.05f) continue
+            for (band in contributing) {
                 db += magnitudeDb(forBand(band, sampleRate), f, sampleRate)
             }
             if (db > peak) peak = db
-            f *= 1.02
+            f *= 1.01
         }
         return peak
     }

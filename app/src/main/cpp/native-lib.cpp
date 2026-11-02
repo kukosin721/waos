@@ -17,7 +17,8 @@
 // Info[i]:      0 api · 1 formato stream · 2 rate stream · 3 canales stream ·
 //               4 framesPerBurst · 5 bufferFrames · 6 deviceId · 7 xRuns ·
 //               8 exclusivo · 9 bitPerfect · 10 passthrough · 11 errorCode ·
-//               12 volumen % · 13 formato origen · 14 rate origen · 15 canales origen
+//               12 volumen % · 13 formato origen · 14 rate origen · 15 canales origen ·
+//               16 latencia real (µs, -1 = desconocida) · 17 MMAP (0/1)
 
 namespace {
 
@@ -35,7 +36,7 @@ audio::PcmFormat toFormat(jint code) {
     }
 }
 
-constexpr jint kInfoSize = 16;
+constexpr jint kInfoSize = 18;
 
 } // namespace
 
@@ -62,8 +63,10 @@ Java_com_kukosin_app_audio_AudioEngine_nativeConfigure(JNIEnv* /*env*/, jobject 
                                                        jlong handle, jint format,
                                                        jint sampleRate, jint channelCount,
                                                        jint deviceId, jboolean strict,
-                                                       jboolean requireExclusive, jint bufferMs,
-                                                       jboolean fades) {
+                                                       jboolean requireExclusive,
+                                                       jboolean requireDevice, jint bufferMs,
+                                                       jboolean fades, jint prerollMs,
+                                                       jint volumeCurve) {
     auto* engine = engineFrom(handle);
     if (engine == nullptr) {
         return static_cast<jint>(oboe::Result::ErrorNull);
@@ -75,8 +78,11 @@ Java_com_kukosin_app_audio_AudioEngine_nativeConfigure(JNIEnv* /*env*/, jobject 
     config.deviceId = deviceId;
     config.strictBitPerfect = strict == JNI_TRUE;
     config.requireExclusive = requireExclusive == JNI_TRUE;
+    config.requireDevice = requireDevice == JNI_TRUE;
     config.bufferMs = bufferMs > 0 ? bufferMs : 250;
     config.fades = fades == JNI_TRUE;
+    config.prerollMs = prerollMs;
+    config.volumeCurve = volumeCurve;
     return static_cast<jint>(engine->open(config));
 }
 
@@ -96,12 +102,49 @@ Java_com_kukosin_app_audio_AudioEngine_nativeStop(JNIEnv* /*env*/, jobject /*thi
                              : static_cast<jint>(engine->stop());
 }
 
+/**
+ * Fin de stream bloqueante: Media3 llama a `AudioOutput.stop()` y espera que lo
+ * pendiente suene. Deja al motor drenando (el callback se detiene solo) y espera,
+ * como máximo `timeoutMs`, a que la posición de playout alcance lo encolado.
+ */
+JNIEXPORT jint JNICALL
+Java_com_kukosin_app_audio_AudioEngine_nativeStopAndWait(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                         jlong handle, jint timeoutMs) {
+    auto* engine = engineFrom(handle);
+    if (engine == nullptr) {
+        return static_cast<jint>(oboe::Result::ErrorNull);
+    }
+    const oboe::Result result = engine->stop();
+    if (result != oboe::Result::OK) {
+        return static_cast<jint>(result);
+    }
+    engine->drain(timeoutMs > 0 ? timeoutMs : 750);
+    return static_cast<jint>(oboe::Result::OK);
+}
+
 JNIEXPORT jint JNICALL
 Java_com_kukosin_app_audio_AudioEngine_nativePause(JNIEnv* /*env*/, jobject /*thiz*/,
                                                    jlong handle) {
     auto* engine = engineFrom(handle);
     return engine == nullptr ? static_cast<jint>(oboe::Result::ErrorNull)
                              : static_cast<jint>(engine->pause());
+}
+
+JNIEXPORT jint JNICALL
+Java_com_kukosin_app_audio_AudioEngine_nativeFlushForTransition(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                               jlong handle) {
+    auto* engine = engineFrom(handle);
+    if (engine == nullptr) {
+        return static_cast<jint>(oboe::Result::ErrorNull);
+    }
+    return static_cast<jint>(engine->flushForTransition());
+}
+
+JNIEXPORT void JNICALL
+Java_com_kukosin_app_audio_AudioEngine_nativeSetVolumeCurve(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                            jlong handle, jint curve) {
+    auto* engine = engineFrom(handle);
+    if (engine != nullptr) engine->setVolumeCurve(curve);
 }
 
 JNIEXPORT jint JNICALL
@@ -146,6 +189,28 @@ Java_com_kukosin_app_audio_AudioEngine_nativeSetVolume(JNIEnv* /*env*/, jobject 
     }
 }
 
+JNIEXPORT void JNICALL
+Java_com_kukosin_app_audio_AudioEngine_nativeSetFades(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                      jlong handle, jboolean enabled) {
+    auto* engine = engineFrom(handle);
+    if (engine != nullptr) {
+        engine->setFadesEnabled(enabled == JNI_TRUE);
+    }
+}
+
+/** Devuelve el resultado de la apertura diferida (OK si ya está abierto). */
+JNIEXPORT jint JNICALL
+Java_com_kukosin_app_audio_AudioEngine_nativeAwaitOpen(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                       jlong handle, jint timeoutMs) {
+    auto* engine = engineFrom(handle);
+    if (engine == nullptr) return static_cast<jint>(oboe::Result::ErrorNull);
+    if (!engine->awaitOpen(timeoutMs > 0 ? timeoutMs : 2000)) {
+        const int32_t code = engine->lastErrorCode();
+        return code != 0 ? code : static_cast<jint>(oboe::Result::ErrorUnavailable);
+    }
+    return static_cast<jint>(oboe::Result::OK);
+}
+
 JNIEXPORT jint JNICALL
 Java_com_kukosin_app_audio_AudioEngine_nativeGetState(JNIEnv* /*env*/, jobject /*thiz*/,
                                                       jlong handle) {
@@ -156,6 +221,28 @@ Java_com_kukosin_app_audio_AudioEngine_nativeGetState(JNIEnv* /*env*/, jobject /
     return static_cast<jint>(engine->state());
 }
 
+/** Posición de PLAYOUT en microsegundos (timestamp de AAudio - latencia real). */
+JNIEXPORT jlong JNICALL
+Java_com_kukosin_app_audio_AudioEngine_nativeGetPositionMicros(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                              jlong handle) {
+    auto* engine = engineFrom(handle);
+    return engine == nullptr ? 0 : static_cast<jlong>(engine->positionMicros());
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_kukosin_app_audio_AudioEngine_nativeGetLatencyMicros(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                             jlong handle) {
+    auto* engine = engineFrom(handle);
+    return engine == nullptr ? -1 : static_cast<jlong>(engine->latencyMicros());
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_kukosin_app_audio_AudioEngine_nativeIsEndOfStream(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                           jlong handle) {
+    auto* engine = engineFrom(handle);
+    return engine != nullptr && engine->endOfStreamReached() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jlong JNICALL
 Java_com_kukosin_app_audio_AudioEngine_nativeGetSourceFrames(JNIEnv* /*env*/, jobject /*thiz*/,
                                                              jlong handle) {
@@ -163,7 +250,7 @@ Java_com_kukosin_app_audio_AudioEngine_nativeGetSourceFrames(JNIEnv* /*env*/, jo
     if (engine == nullptr) {
         return 0;
     }
-    return static_cast<jlong>(engine->sourceFramesConsumed());
+    return static_cast<jlong>(engine->sourceFramesQueued());
 }
 
 JNIEXPORT jint JNICALL
@@ -184,7 +271,7 @@ Java_com_kukosin_app_audio_AudioEngine_nativeGetInfo(JNIEnv* env, jobject /*thiz
     const jsize size = env->GetArrayLength(out);
     if (size < kInfoSize) return;
 
-    jint values[kInfoSize] = {-1, -1, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 100, -1, 0, 0};
+    jint values[kInfoSize] = {-1, -1, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 100, -1, 0, 0, -1, 0};
     if (engine != nullptr) {
         const audio::StreamInfo info = engine->info();
         values[0] = info.api;
@@ -203,6 +290,8 @@ Java_com_kukosin_app_audio_AudioEngine_nativeGetInfo(JNIEnv* env, jobject /*thiz
         values[13] = info.sourceFormat;
         values[14] = info.sourceSampleRate;
         values[15] = info.sourceChannels;
+        values[16] = info.latencyMicros;
+        values[17] = info.mmap ? 1 : 0;
     }
     env->SetIntArrayRegion(out, 0, kInfoSize, values);
 }

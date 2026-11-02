@@ -3,6 +3,7 @@
 
 package com.kukosin.app.ui.component
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -53,10 +54,14 @@ import kotlin.random.Random
 fun KukosinWaveformSlider(
     progress: Float,
     onSeek: (Float) -> Unit,
+    /** Se llama mientras el dedo se mueve (antes de soltar). Opcional. */
+    onScrub: (Float) -> Unit = {},
     modifier: Modifier = Modifier,
     waveHeight: Dp = 128.dp,
     waveform: List<Float>? = null,
     trackKey: String? = null, // pass track.uri.toString() or "title|artist" -> unique wave per song
+    /** La onda todavía se está extrayendo: barras planas y controles abajo. */
+    isLoading: Boolean = false,
     isPlaying: Boolean = true,
     enabled: Boolean = true,
     onPlayPause: () -> Unit = {},
@@ -81,7 +86,10 @@ fun KukosinWaveformSlider(
     // Al arrastrar, snap instantáneo para seguir el dedo sin lag.
     val animatedProgress by animateFloatAsState(
         targetValue = displayProgress,
-        animationSpec = if (isDragging) snap() else tween(durationMillis = 520, easing = FastOutSlowInEasing),
+        // Mientras se reproduce, la posición se muestrea ~10 veces por segundo: un
+        // tween corto y lineal rellena el hueco sin retargetear una animación larga en
+        // cada tick (eso era lo que hacía que la onda se sintiera "pesada").
+        animationSpec = if (isDragging) snap() else tween(durationMillis = 220, easing = LinearEasing),
         label = "waveProgressSmooth"
     )
     // Para el gesto, usamos el valor objetivo (no el animado) para cálculo preciso
@@ -107,18 +115,41 @@ fun KukosinWaveformSlider(
         label = "waveControlsAlpha"
     )
 
-    val bars = remember(waveform, trackKey) {
-        if (waveform != null) {
-            when {
+    val bars = remember(waveform, trackKey, isLoading) {
+        when {
+            // Cargando: todas las barras abajo (planas). Al llegar los datos reales
+            // suben con un escalonado suave (ver `waveReveal`).
+            isLoading -> List(180) { 0f }
+            waveform != null -> when {
                 waveform.isEmpty() -> List(180) { 0f }
                 waveform.size >= 160 -> waveform
                 else -> expandWaveform(waveform, 180)
             }
-        } else {
-            val seed = trackKey?.hashCode() ?: 42
-            generateKukosinWaveform(180, seed = seed)
+            else -> {
+                val seed = trackKey?.hashCode() ?: 42
+                generateKukosinWaveform(180, seed = seed)
+            }
         }
     }
+
+    // 0 = plano, 1 = onda completa. Se lee desde el `Canvas`, así que anima sin
+    // recomponer: sólo invalida el dibujo.
+    val waveReveal = remember { Animatable(if (isLoading) 0f else 1f) }
+    LaunchedEffect(isLoading, bars) {
+        if (isLoading) {
+            waveReveal.snapTo(0f)
+        } else {
+            waveReveal.animateTo(1f, tween(durationMillis = 620, easing = FastOutSlowInEasing))
+        }
+    }
+
+    // Los controles esperan abajo mientras la onda carga y suben a su lugar cuando
+    // está lista. Es una sola propiedad de capa, no un relayout.
+    val controlsShift by animateFloatAsState(
+        targetValue = if (isLoading) 1f else 0f,
+        animationSpec = tween(durationMillis = 460, easing = FastOutSlowInEasing),
+        label = "waveControlsShift"
+    )
 
     val currentDisplayProgress by rememberUpdatedState(progressForGestures)
     val currentClamped by rememberUpdatedState(clamped)
@@ -174,7 +205,12 @@ fun KukosinWaveformSlider(
                     ) { change, dragAmount ->
                         change.consume()
                         val delta = -dragAmount * sensitivity / size.width.toFloat()
-                        dragProgress = (dragProgress!! + delta).coerceIn(0f, 1f)
+                        val next = (dragProgress!! + delta).coerceIn(0f, 1f)
+                        dragProgress = next
+                        // Aviso en vivo: el reloj que dibuja el reproductor sigue al dedo
+                        // sin mandar seeks a ExoPlayer (un seekTo por movimiento es lo
+                        // que hacía que adelantar una canción se sintiera trabado).
+                        onScrub(next)
                     }
                 }
                 .pointerInput(bars, trackKey, enabled) {
@@ -209,17 +245,35 @@ fun KukosinWaveformSlider(
                 size = Size(64.dp.toPx(), waveH),
             )
 
+            val reveal = waveReveal.value
+            val waveBottom = waveTop + waveH
+            val minBarH = 3.dp.toPx()
             bars.forEachIndexed { i, amp ->
                 val normalized = amp.coerceIn(0f, 1f)
                 // El silencio real sigue siendo una línea baja, incluso con la onda más alta.
-                val hFrac = if (normalized <= 0.0001f) 0.035f else 0.16f + normalized * 0.84f
-                val bh = waveH * hFrac
+                val baseFrac = if (normalized <= 0.0001f) 0.035f else 0.16f + normalized * 0.84f
+                // Escalonado de izquierda a derecha: cada barra arranca un poco más
+                // tarde que la anterior. Con la onda ya revelada el factor es 1 y el
+                // cálculo no cuesta nada.
+                val local = if (reveal >= 0.999f) {
+                    1f
+                } else {
+                    val start = (i.toFloat() / bars.size.toFloat()) * 0.55f
+                    ((reveal - start) / 0.45f).coerceIn(0f, 1f)
+                }
+                val eased = 1f - (1f - local) * (1f - local)
+                // Cargando: todas las barras son una línea fina apoyada en la base de la
+                // onda. Al revelarse crecen y suben hasta quedar centradas en su altura
+                // final. Son dos interpolaciones por barra, no un relayout.
+                val finalH = waveH * baseFrac
+                val bh = minBarH + (finalH - minBarH) * eased
+                val bottomY = waveBottom + ((waveCenterY + finalH / 2f) - waveBottom) * eased
                 val x = startX + i * slot
                 if (x + barW < -12.dp.toPx() || x > w + 12.dp.toPx()) return@forEachIndexed
                 val played = (x + barW / 2f) <= centerX
                 drawRoundRect(
                     color = if (played) playedColor else remainingColor,
-                    topLeft = Offset(x, waveCenterY - bh / 2f),
+                    topLeft = Offset(x, bottomY - bh),
                     size = Size(barW, bh),
                     cornerRadius = CornerRadius(10.dp.toPx(), 10.dp.toPx()),
                 )
@@ -250,7 +304,10 @@ fun KukosinWaveformSlider(
             contentAlignment = Alignment.Center
         ) {
             Row(
-                modifier = Modifier.graphicsLayer { alpha = controlsAlpha },
+                modifier = Modifier.graphicsLayer {
+                    alpha = controlsAlpha
+                    translationY = controlsShift * 26.dp.toPx()
+                },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
             ) {

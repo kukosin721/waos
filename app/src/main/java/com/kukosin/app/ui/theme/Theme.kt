@@ -4,11 +4,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.text.font.FontWeight
 import com.kukosin.app.ui.FontWeightOption
+import com.kukosin.app.ui.LocalUiSettings
 import com.kukosin.app.ui.UiSettingsManager
 
 /**
@@ -65,9 +67,13 @@ fun AppTheme(content: @Composable () -> Unit) {
         if (uiSettings.fontOption == FontWeightOption.BOLD) Typography.asBold() else Typography
     }
 
-    MaterialTheme(
-        colorScheme = scheme,
-        typography = typography,
-        content = content,
-    )
+    // Los ajustes visuales (blur, velocidad) quedan disponibles para cualquier composable
+    // sin pasarlos como parámetro: `LocalUiSettings.current`.
+    CompositionLocalProvider(LocalUiSettings provides uiSettings) {
+        MaterialTheme(
+            colorScheme = scheme,
+            typography = typography,
+            content = content,
+        )
+    }
 }

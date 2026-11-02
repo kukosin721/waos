@@ -36,6 +36,8 @@ internal class EqEngine {
         var a1 = 0.0
         var a2 = 0.0
         var active = false
+        var activeTarget = false
+        var moving = false
         val z1 = DoubleArray(channels)
         val z2 = DoubleArray(channels)
     }
@@ -49,7 +51,6 @@ internal class EqEngine {
     private var bandFreq = DoubleArray(0)
     private var bandQ = DoubleArray(0)
     private var bandGainTarget = DoubleArray(0)
-    private var bandGainCurrent = DoubleArray(0)
     private var bandTypes: Array<EqBandType> = emptyArray()
     private var activeStages = IntArray(0)
     private var activeCount = 0
@@ -63,6 +64,19 @@ internal class EqEngine {
 
     private var configured = false
     private val designScratch = DoubleArray(5)
+
+    /**
+     * Coeficientes objetivo y coeficientes suavizados.
+     *
+     * Suavizar la GANANCIA y rediseñar el biquad en cada sub-bloque hace que los polos
+     * se muevan por el plano z mientras suena: eso se escucha como un "swish" al mover
+     * un slider de Q o de frecuencia. Suavizar directamente los CINCO COEFICIENTES de
+     * cada biquad es la técnica de los ecualizadores de estudio: el filtro se
+     * interpola entre dos estados estables y nunca pierde estabilidad mientras la
+     * ganancia va de -12 a +12 dB.
+     */
+    private var targetCoef = DoubleArray(0)
+    private var smoothCoef = DoubleArray(0)
 
     /** ¿La cadena está en bypass total (seco puro, sin ningún proceso)? */
     val isBypass: Boolean
@@ -81,15 +95,15 @@ internal class EqEngine {
         bandFreq = DoubleArray(count)
         bandQ = DoubleArray(count)
         bandGainTarget = DoubleArray(count)
-        bandGainCurrent = DoubleArray(count)
         bandTypes = Array(count) { i -> s.bands[i].type }
         activeStages = IntArray(count)
         activeCount = 0
+        targetCoef = DoubleArray(count * 5)
+        smoothCoef = DoubleArray(count * 5)
         for (i in 0 until count) {
             bandFreq[i] = s.bands[i].freqHz.toDouble()
             bandQ[i] = s.bands[i].q.toDouble()
             bandGainTarget[i] = 0.0
-            bandGainCurrent[i] = 0.0
         }
         preampCurrentDb = if (s.isProcessing) s.effectivePreampDb.toDouble() else 0.0
         preampTargetDb = preampCurrentDb
@@ -98,7 +112,18 @@ internal class EqEngine {
         wetTarget = wet
         resetStates()
         configured = true
-        updateCoefficients()
+        for (i in stages.indices) {
+            bandGainTarget[i] = if (s.isProcessing && s.bands[i].isGainBand) {
+                s.bands[i].gainDb.toDouble().coerceIn(-MAX_GAIN_DB, MAX_GAIN_DB)
+            } else {
+                0.0
+            }
+        }
+        // Primer suavizado: deja el objetivo calculado y copia los coeficientes sin
+        // rampa, así la primera configuración ya suena con la curva exacta.
+        smoothAndUpdate()
+        smoothCoef = targetCoef.copyOf()
+        smoothAndUpdate()
     }
 
     /** El estado del EQ cambió (cualquier hilo). Se aplica suavemente en el próximo bloque. */
@@ -163,7 +188,7 @@ internal class EqEngine {
             frame += n
         }
         flushDenormals()
-        return peak
+        return if (peak.isFinite()) peak else 0.0
     }
 
     // ------------------------------------------------------------------ interno
@@ -183,81 +208,85 @@ internal class EqEngine {
         wetTarget = if (active) 1.0 else 0.0
         wet += (wetTarget - wet) * SMOOTH
 
-        val count = bandGainCurrent.size
-        var changed = false
+        val count = bandGainTarget.size
         if (target.bands.size >= count) {
             for (i in 0 until count) {
                 val band = target.bands[i]
-                val gTarget = if (active) band.gainDb.toDouble() else 0.0
-                if (band.freqHz.toDouble() != bandFreq[i]) {
-                    bandFreq[i] = band.freqHz.toDouble()
-                    changed = true
+                bandFreq[i] = band.freqHz.toDouble()
+                bandQ[i] = band.q.toDouble()
+                bandTypes[i] = band.type
+                val gTarget = if (active && band.isGainBand) {
+                    band.gainDb.toDouble().coerceIn(-MAX_GAIN_DB, MAX_GAIN_DB)
+                } else {
+                    0.0
                 }
-                if (band.q.toDouble() != bandQ[i]) {
-                    bandQ[i] = band.q.toDouble()
-                    changed = true
-                }
-                if (band.type != bandTypes[i]) {
-                    bandTypes[i] = band.type
-                    changed = true
-                }
-                if (abs(gTarget - bandGainTarget[i]) > 1e-6) {
-                    bandGainTarget[i] = gTarget
-                    changed = true
-                }
-            }
-        }
-        for (i in 0 until count) {
-            val delta = bandGainTarget[i] - bandGainCurrent[i]
-            if (abs(delta) > 1e-4) {
-                bandGainCurrent[i] += delta * SMOOTH
-                changed = true
-            } else if (delta != 0.0) {
-                bandGainCurrent[i] = bandGainTarget[i]
-                changed = true
+                bandGainTarget[i] = gTarget
             }
         }
 
+        // Preamp: se suaviza en dB (es un escalar, no hay polos que mover).
         val preampT = if (active) target.effectivePreampDb.toDouble() else 0.0
-        if (abs(preampT - preampTargetDb) > 1e-6) {
-            preampTargetDb = preampT
-            changed = true
-        }
+        preampTargetDb = preampT
         val pDelta = preampTargetDb - preampCurrentDb
         if (abs(pDelta) > 1e-4) {
             preampCurrentDb += pDelta * SMOOTH
-            preampGain = dbToLinear(preampCurrentDb)
-            changed = true
-        } else if (pDelta != 0.0) {
+        } else {
             preampCurrentDb = preampTargetDb
-            preampGain = dbToLinear(preampCurrentDb)
-            changed = true
         }
+        preampGain = dbToLinear(preampCurrentDb)
 
-        if (abs(wet - wetTarget) < 1e-3) wet = wetTarget
-
-        if (changed) updateCoefficients()
-    }
-
-    private fun updateCoefficients() {
-        var n = 0
+        // 1) Rediseño de los coeficientes OBJETIVO (fuera del lazo de muestras).
         for (i in stages.indices) {
-            val s = stages[i]
-            val active = BiquadDesign.designInto(
+            val activeStage = BiquadDesign.designInto(
                 type = bandTypes[i],
                 sampleRate = sampleRate,
                 freqHz = bandFreq[i],
                 q = bandQ[i],
-                gainDb = bandGainCurrent[i],
+                gainDb = bandGainTarget[i],
                 out = designScratch,
             )
-            s.b0 = designScratch[0]
-            s.b1 = designScratch[1]
-            s.b2 = designScratch[2]
-            s.a1 = designScratch[3]
-            s.a2 = designScratch[4]
-            s.active = active
-            if (active) {
+            val base = i * 5
+            targetCoef[base] = if (activeStage) designScratch[0] else 1.0
+            targetCoef[base + 1] = if (activeStage) designScratch[1] else 0.0
+            targetCoef[base + 2] = if (activeStage) designScratch[2] else 0.0
+            targetCoef[base + 3] = if (activeStage) designScratch[3] else 0.0
+            targetCoef[base + 4] = if (activeStage) designScratch[4] else 0.0
+            stages[i].activeTarget = activeStage
+        }
+
+        // 2) Los coeficientes que suenan se mueven hacia el objetivo.
+        for (i in stages.indices) {
+            val base = i * 5
+            var stageMoving = false
+            for (k in 0 until 5) {
+                val delta = targetCoef[base + k] - smoothCoef[base + k]
+                if (abs(delta) > COEF_EPS) {
+                    smoothCoef[base + k] += delta * SMOOTH
+                    stageMoving = true
+                } else {
+                    smoothCoef[base + k] = targetCoef[base + k]
+                }
+            }
+            stages[i].moving = stageMoving
+        }
+        if (abs(wet - wetTarget) < 1e-3) wet = wetTarget
+
+        // 3) Se publican a las etapas y se recalcula qué etapas están activas.
+        //    Una etapa cuenta como activa si su objetivo lo es o si todavía está
+        //    viajando hacia/desde el bypass (si no, se cortaría el fade del filtro).
+        var n = 0
+        for (i in stages.indices) {
+            val s = stages[i]
+            val base = i * 5
+            s.b0 = smoothCoef[base]
+            s.b1 = smoothCoef[base + 1]
+            s.b2 = smoothCoef[base + 2]
+            s.a1 = smoothCoef[base + 3]
+            s.a2 = smoothCoef[base + 4]
+            val midpoint = abs(s.b0 - 1.0) > COEF_EPS || abs(s.b1) > COEF_EPS ||
+                abs(s.b2) > COEF_EPS || abs(s.a1) > COEF_EPS || abs(s.a2) > COEF_EPS
+            s.active = s.activeTarget || midpoint || s.moving
+            if (s.active) {
                 if (n < activeStages.size) activeStages[n] = i
                 n++
             }
@@ -281,6 +310,9 @@ internal class EqEngine {
         /** One-pole por sub-bloque → constante de tiempo ≈ 15 ms. */
         const val SMOOTH = 0.35
         const val DENORMAL = 1e-20
+        /** Umbral para considerar que dos coeficientes son distintos (≈ -280 dB). */
+        const val COEF_EPS = 1e-9
+        const val MAX_GAIN_DB = 12.0
 
         fun dbToLinear(db: Double): Double = 10.0.pow(db / 20.0)
     }

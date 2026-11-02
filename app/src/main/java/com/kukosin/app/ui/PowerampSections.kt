@@ -1,13 +1,22 @@
 package com.kukosin.app.ui
 
 import android.net.Uri
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -32,6 +41,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -132,8 +142,13 @@ internal enum class AppSection {
 }
 
 /**
- * Fila inferior estilo Poweramp con los 4 accesos rápidos principales del reproductor:
- * Biblioteca · Ecualizador · Búsqueda · Configuración
+ * Barra inferior con los 4 accesos rápidos del reproductor:
+ * Biblioteca · Ecualizador · Búsqueda · Configuración.
+ *
+ * Es una sola pieza (un "segmented control"): los iconos van unidos dentro del mismo
+ * contenedor y separados por divisores finos, sin texto. Antes cada acceso era una
+ * tarjeta con etiqueta de dos líneas, que ocupaba 64 dp y competía visualmente con la
+ * onda; ahora la barra mide 54 dp, se lee de un vistazo y deja respirar al reproductor.
  */
 @Composable
 internal fun PlayerShortcutBar(
@@ -144,44 +159,66 @@ internal fun PlayerShortcutBar(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
+    Surface(
+        color = InkSoft,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, Gold.copy(alpha = 0.22f)),
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        ShortcutPillButton(
-            icon = Icons.Rounded.LibraryMusic,
-            label = "Library",
-            enabled = enabled,
-            onClick = onOpenLibrary,
-            modifier = Modifier.weight(1f),
-        )
-        ShortcutPillButton(
-            icon = Icons.Rounded.Tune,
-            label = "Equalizer",
-            enabled = enabled,
-            onClick = onOpenEqualizer,
-            modifier = Modifier.weight(1f),
-        )
-        ShortcutPillButton(
-            icon = Icons.Rounded.Search,
-            label = "Search",
-            enabled = enabled,
-            onClick = onOpenSearch,
-            modifier = Modifier.weight(1f),
-        )
-        ShortcutPillButton(
-            icon = Icons.Rounded.Settings,
-            label = "Settings",
-            enabled = enabled,
-            onClick = onOpenSettings,
-            modifier = Modifier.weight(1f),
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ShortcutIconButton(
+                icon = Icons.Rounded.LibraryMusic,
+                label = "Library",
+                enabled = enabled,
+                onClick = onOpenLibrary,
+                modifier = Modifier.weight(1f),
+            )
+            ShortcutDivider()
+            ShortcutIconButton(
+                icon = Icons.Rounded.Tune,
+                label = "Equalizer",
+                enabled = enabled,
+                onClick = onOpenEqualizer,
+                modifier = Modifier.weight(1f),
+            )
+            ShortcutDivider()
+            ShortcutIconButton(
+                icon = Icons.Rounded.Search,
+                label = "Search",
+                enabled = enabled,
+                onClick = onOpenSearch,
+                modifier = Modifier.weight(1f),
+            )
+            ShortcutDivider()
+            ShortcutIconButton(
+                icon = Icons.Rounded.Settings,
+                label = "Settings",
+                enabled = enabled,
+                onClick = onOpenSettings,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
+/** Separador vertical fino entre dos accesos de la barra. */
 @Composable
-private fun ShortcutPillButton(
+private fun ShortcutDivider() {
+    Box(
+        modifier = Modifier
+            .width(1.dp)
+            .height(22.dp)
+            .background(Gold.copy(alpha = 0.14f)),
+    )
+}
+
+@Composable
+private fun ShortcutIconButton(
     icon: ImageVector,
     label: String,
     enabled: Boolean,
@@ -189,45 +226,24 @@ private fun ShortcutPillButton(
     modifier: Modifier = Modifier,
 ) {
     val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.95f else 1f,
-        animationSpec = tween(durationMillis = 130, easing = FastOutSlowInEasing),
-        label = "shortcutPress",
-    )
-    Surface(
-        color = InkSoft,
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(1.dp, Gold.copy(alpha = 0.28f)),
+    Box(
         modifier = modifier
-            .height(64.dp)
-            .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
-            .clip(RoundedCornerShape(14.dp))
-            .clickable(interactionSource = interaction, indication = LocalIndication.current, enabled = enabled, onClick = onClick),
+            .fillMaxHeight()
+            .pressScale(interaction, scale = 0.94f)
+            .clickable(
+                interactionSource = interaction,
+                indication = LocalIndication.current,
+                enabled = enabled,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 2.dp, vertical = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = Gold,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = label,
-                fontSize = 10.sp,
-                lineHeight = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Cream,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-            )
-        }
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = if (enabled) Gold else CreamMuted.copy(alpha = 0.38f),
+            modifier = Modifier.size(22.dp),
+        )
     }
 }
 
@@ -373,394 +389,491 @@ internal fun PowerampLibraryWorkspace(
             }
         }
 
-        if (activeCategory == null) {
-            val categories = remember(
-                library.tracks.size,
-                library.albums.size,
-                library.artists.size,
-                library.albumArtists.size,
-                library.genres.size,
-                library.years.size,
-                library.composers.size,
-                library.rootFolder,
-                queueCount,
-                favoriteCount,
-                playedCount,
-            ) {
-                listOf(
-                    CategoryCardSpec(
-                        category = LibraryCategory.TODAS_LAS_CANCIONES,
-                        icon = Icons.Rounded.MusicNote,
-                        subtitle = "${library.tracks.size} songs",
-                    ),
-                    CategoryCardSpec(
-                        category = LibraryCategory.CARPETAS,
-                        icon = Icons.Rounded.Folder,
-                        subtitle = "${library.rootFolder?.subfolders?.size ?: 0} folders",
-                    ),
-                    CategoryCardSpec(
-                        category = LibraryCategory.ALBUMES,
-                        icon = Icons.Rounded.Album,
-                        subtitle = "${library.albums.size} albums",
-                    ),
-                    CategoryCardSpec(
-                        category = LibraryCategory.ARTISTAS,
-                        icon = Icons.Rounded.Person,
-                        subtitle = "${library.artists.size} artists",
-                    ),
-                    CategoryCardSpec(
-                        category = LibraryCategory.ARTISTAS_DEL_ALBUM,
-                        icon = Icons.Rounded.Group,
-                        subtitle = "${library.albumArtists.size} album artists",
-                    ),
-                    CategoryCardSpec(
-                        category = LibraryCategory.GENEROS,
-                        icon = Icons.Rounded.Category,
-                        subtitle = "${library.genres.size} genres",
-                    ),
-                    CategoryCardSpec(
-                        category = LibraryCategory.ANOS,
-                        icon = Icons.Rounded.DateRange,
-                        subtitle = "${library.years.size} years",
-                    ),
-                    CategoryCardSpec(
-                        category = LibraryCategory.COMPOSITORES,
-                        icon = Icons.Rounded.Piano,
-                        subtitle = "${library.composers.size} composers",
-                    ),
-                    CategoryCardSpec(
-                        category = LibraryCategory.LISTAS_DE_REPRODUCCION,
-                        icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
-                        subtitle = "Custom playlists",
-                        badge = "Soon",
-                    ),
-                    CategoryCardSpec(
-                        category = LibraryCategory.LA_COLA,
-                        icon = Icons.AutoMirrored.Rounded.QueueMusic,
-                        subtitle = "$queueCount in queue",
-                    ),
-                    CategoryCardSpec(
-                        category = LibraryCategory.FAVORITOS,
-                        icon = Icons.Rounded.Favorite,
-                        subtitle = "$favoriteCount tracks marked",
-                    ),
-                    CategoryCardSpec(
-                        category = LibraryCategory.MAS_REPRODUCIDO,
-                        icon = Icons.Rounded.Star,
-                        subtitle = "$playedCount tracks played",
-                    ),
-                )
+        // ---------------------------------------------------------------------------
+        // Navegación animada de la Biblioteca
+        //
+        // Antes este bloque era un `if (activeCategory == null) { … } else { … }`: tocar
+        // "Álbumes" reemplazaba el contenido de golpe y la nueva pantalla ya estaba ahí,
+        // compuesta, sin ninguna pista de qué acababa de pasar. Ahora la categoría (y cada
+        // carpeta dentro de Carpetas) se desliza: entra desde el lado hacia el que vas y la
+        // anterior sale por el lado contrario, con un desenfoque muy corto encima que le da
+        // la sensación de profundidad sin costar una pasada de GPU sostenida.
+        // ---------------------------------------------------------------------------
+        var navDirection by remember { mutableIntStateOf(1) }
+
+        // Clave de navegación: la categoría activa y, en Carpetas, la ruta completa. Así
+        // entrar a una subcarpeta es una navegación más (se anima) aunque la categoría
+        // siga siendo la misma.
+        val navKey = when (activeCategory) {
+            null -> "root"
+            LibraryCategory.CARPETAS -> "folders/" + library.folderPath.joinToString("/") { it.path }
+            else -> activeCategory.name
+        }
+
+        // Desenfoque de navegación: sólo existe DURANTE el cruce. Se apaga solo y no deja
+        // ningún `RenderEffect` activo cuando la pantalla está quieta. Con Blur = Off en
+        // Ajustes este bloque ni se ejecuta.
+        val blur = LocalUiSettings.current.blur
+        val animationSpeed = LocalUiSettings.current.animationSpeed
+        val navBlurFactor = remember { androidx.compose.animation.core.Animatable(0f) }
+        LaunchedEffect(navKey) {
+            if (blur.enabled && animationSpeed.scale > 0f) {
+                navBlurFactor.snapTo(0f)
+                navBlurFactor.animateTo(1f, Motion.quick(Motion.SCREEN_MS / 3))
+                navBlurFactor.animateTo(0f, Motion.leave(Motion.SCREEN_MS / 2))
             }
+        }
 
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(
-                    start = 16.dp,
-                    end = 16.dp,
-                    top = 6.dp,
-                    bottom = bottomPadding.dp,
+        AnimatedContent(
+            targetState = navKey,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .then(
+                    // 7 dp en "Soft": se lee como desenfoque de movimiento, no como una
+                    // pantalla borrosa. Con Off no se aplica ni una vez.
+                    if (blur.enabled && navBlurFactor.value > 0.01f) {
+                        Modifier.blur(
+                            radius = (blur.navigate.value * navBlurFactor.value).dp,
+                            edgeTreatment = BlurredEdgeTreatment.Rectangle,
+                        )
+                    } else {
+                        Modifier
+                    },
                 ),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                library.error?.let { message ->
-                    item(span = { GridItemSpan(2) }) {
-                        Surface(
-                            color = InkSoft,
-                            shape = RoundedCornerShape(16.dp),
-                            border = BorderStroke(1.dp, Gold.copy(alpha = 0.45f)),
-                        ) {
-                            Column(Modifier.padding(14.dp)) {
-                                Text("Could not scan the library", color = Cream, fontWeight = FontWeight.Bold)
-                                Text(message, color = CreamMuted, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
-                }
-                if (!hasPermission) {
-                    item(span = { GridItemSpan(2) }) {
-                        Surface(
-                            color = InkSoft,
-                            shape = RoundedCornerShape(16.dp),
-                            border = BorderStroke(1.dp, Gold.copy(alpha = 0.45f)),
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(14.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        "Audio permission pending",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = Cream,
-                                        fontWeight = FontWeight.Bold,
-                                    )
-                                    Text(
-                                        "Grant it to index your local folders and tracks.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = CreamMuted,
-                                    )
-                                }
-                                Spacer(Modifier.width(10.dp))
-                                Button(
-                                    onClick = onRequestPermission,
-                                    colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
-                                    shape = RoundedCornerShape(12.dp),
-                                ) {
-                                    Text("Allow", fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                items(categories, key = { it.category.name }) { spec ->
-                    LibraryCategoryCard(
-                        spec = spec,
-                        onClick = { onSelectCategory(spec.category) },
+            transitionSpec = { libraryNavTransform(navDirection) },
+            label = "libraryNavigation",
+        ) { _ ->
+            Column(modifier = Modifier.fillMaxSize()) {
+        if (activeCategory == null) {
+                val categories = remember(
+                    library.tracks.size,
+                    library.albums.size,
+                    library.artists.size,
+                    library.albumArtists.size,
+                    library.genres.size,
+                    library.years.size,
+                    library.composers.size,
+                    library.rootFolder,
+                    queueCount,
+                    favoriteCount,
+                    playedCount,
+                ) {
+                    listOf(
+                        CategoryCardSpec(
+                            category = LibraryCategory.TODAS_LAS_CANCIONES,
+                            icon = Icons.Rounded.MusicNote,
+                            subtitle = "${library.tracks.size} songs",
+                        ),
+                        CategoryCardSpec(
+                            category = LibraryCategory.CARPETAS,
+                            icon = Icons.Rounded.Folder,
+                            subtitle = "${library.rootFolder?.subfolders?.size ?: 0} folders",
+                        ),
+                        CategoryCardSpec(
+                            category = LibraryCategory.ALBUMES,
+                            icon = Icons.Rounded.Album,
+                            subtitle = "${library.albums.size} albums",
+                        ),
+                        CategoryCardSpec(
+                            category = LibraryCategory.ARTISTAS,
+                            icon = Icons.Rounded.Person,
+                            subtitle = "${library.artists.size} artists",
+                        ),
+                        CategoryCardSpec(
+                            category = LibraryCategory.ARTISTAS_DEL_ALBUM,
+                            icon = Icons.Rounded.Group,
+                            subtitle = "${library.albumArtists.size} album artists",
+                        ),
+                        CategoryCardSpec(
+                            category = LibraryCategory.GENEROS,
+                            icon = Icons.Rounded.Category,
+                            subtitle = "${library.genres.size} genres",
+                        ),
+                        CategoryCardSpec(
+                            category = LibraryCategory.ANOS,
+                            icon = Icons.Rounded.DateRange,
+                            subtitle = "${library.years.size} years",
+                        ),
+                        CategoryCardSpec(
+                            category = LibraryCategory.COMPOSITORES,
+                            icon = Icons.Rounded.Piano,
+                            subtitle = "${library.composers.size} composers",
+                        ),
+                        CategoryCardSpec(
+                            category = LibraryCategory.LISTAS_DE_REPRODUCCION,
+                            icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
+                            subtitle = "Custom playlists",
+                            badge = "Soon",
+                        ),
+                        CategoryCardSpec(
+                            category = LibraryCategory.LA_COLA,
+                            icon = Icons.AutoMirrored.Rounded.QueueMusic,
+                            subtitle = "$queueCount in queue",
+                        ),
+                        CategoryCardSpec(
+                            category = LibraryCategory.FAVORITOS,
+                            icon = Icons.Rounded.Favorite,
+                            subtitle = "$favoriteCount tracks marked",
+                        ),
+                        CategoryCardSpec(
+                            category = LibraryCategory.MAS_REPRODUCIDO,
+                            icon = Icons.Rounded.Star,
+                            subtitle = "$playedCount tracks played",
+                        ),
                     )
                 }
-            }
-        } else {
-            val requiresLocalScan = activeCategory in setOf(
-                LibraryCategory.TODAS_LAS_CANCIONES,
-                LibraryCategory.CARPETAS,
-                LibraryCategory.ALBUMES,
-                LibraryCategory.ARTISTAS,
-                LibraryCategory.ARTISTAS_DEL_ALBUM,
-                LibraryCategory.GENEROS,
-                LibraryCategory.ANOS,
-                LibraryCategory.COMPOSITORES,
-                LibraryCategory.FAVORITOS,
-                LibraryCategory.MAS_REPRODUCIDO,
-            )
 
-            when {
-                requiresLocalScan && !hasPermission -> PermissionCard(onGrant = onRequestPermission)
-                requiresLocalScan && library.isScanning && library.tracks.isEmpty() -> LoadingLibrary()
-                requiresLocalScan && library.hasScanned && library.tracks.isEmpty() -> EmptyLibrary(hasQuery = false)
-                else -> {
-                    when (activeCategory) {
-                        LibraryCategory.TODAS_LAS_CANCIONES -> {
-                            SearchField(query = library.query, onQueryChange = onQueryChange)
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 20.dp, vertical = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 6.dp,
+                        bottom = bottomPadding.dp,
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    library.error?.let { message ->
+                        item(span = { GridItemSpan(2) }) {
+                            Surface(
+                                color = InkSoft,
+                                shape = RoundedCornerShape(16.dp),
+                                border = BorderStroke(1.dp, Gold.copy(alpha = 0.45f)),
                             ) {
-                                Button(
-                                    onClick = {
-                                        if (library.filteredTracks.isNotEmpty()) {
-                                            onTrackClick(library.filteredTracks, 0)
-                                        }
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.weight(1f),
-                                ) {
-                                    Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Play (${library.filteredTracks.size})", fontWeight = FontWeight.Bold)
+                                Column(Modifier.padding(14.dp)) {
+                                    Text("Could not scan the library", color = Cream, fontWeight = FontWeight.Bold)
+                                    Text(message, color = CreamMuted, style = MaterialTheme.typography.bodySmall)
                                 }
-                                OutlinedButton(
-                                    onClick = {
-                                        if (library.filteredTracks.isNotEmpty()) {
-                                            val shuffled = library.filteredTracks.shuffled()
-                                            onTrackClick(shuffled, 0)
-                                        }
-                                    },
-                                    border = BorderStroke(1.dp, Gold.copy(alpha = 0.6f)),
-                                    shape = RoundedCornerShape(12.dp),
-                                ) {
-                                    Icon(Icons.Rounded.Shuffle, contentDescription = null, tint = Gold, modifier = Modifier.size(18.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Shuffle", color = Gold, fontWeight = FontWeight.Bold)
-                                }
-                                SortMenuButton(
-                                    current = library.sortMode,
-                                    onSelect = onSortChange,
-                                )
                             }
-                            TrackList(
-                                tracks = library.filteredTracks,
-                                currentUri = currentUri,
-                                isPlaying = isPlaying,
-                                controller = controller,
-                                onTrackClick = { idx -> onTrackClick(library.filteredTracks, idx) },
-                                onInspectClick = onInspectTrack,
-                                onMessage = onMessage,
-                                modifier = Modifier.weight(1f),
-                                bottomPadding = bottomPadding,
-                                indexSort = library.sortMode,
-                                focusUri = focusUri,
-                            )
                         }
-
-                        LibraryCategory.CARPETAS -> {
-                            FolderBrowserView(
-                                currentFolder = library.currentFolder,
-                                folderPath = library.folderPath,
-                                currentUri = currentUri,
-                                isPlaying = isPlaying,
-                                controller = controller,
-                                onFolderClick = onFolderClick,
-                                onNavigateUp = onNavigateUpFolder,
-                                onTrackClick = onTrackClick,
-                                onInspectClick = onInspectTrack,
-                                onMessage = onMessage,
-                                modifier = Modifier.weight(1f),
-                                bottomPadding = bottomPadding,
-                            )
+                    }
+                    if (!hasPermission) {
+                        item(span = { GridItemSpan(2) }) {
+                            Surface(
+                                color = InkSoft,
+                                shape = RoundedCornerShape(16.dp),
+                                border = BorderStroke(1.dp, Gold.copy(alpha = 0.45f)),
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            "Audio permission pending",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = Cream,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                        Text(
+                                            "Grant it to index your local folders and tracks.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = CreamMuted,
+                                        )
+                                    }
+                                    Spacer(Modifier.width(10.dp))
+                                    Button(
+                                        onClick = onRequestPermission,
+                                        colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
+                                        shape = RoundedCornerShape(12.dp),
+                                    ) {
+                                        Text("Allow", fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
                         }
+                    }
 
-                        LibraryCategory.ALBUMES -> {
-                            SearchField(query = library.query, onQueryChange = onQueryChange)
-                            AlbumView(
-                                albums = library.filteredAlbums,
-                                onAlbumClick = onAlbumClick,
-                                modifier = Modifier.weight(1f),
-                                bottomPadding = bottomPadding,
-                            )
-                        }
-
-                        LibraryCategory.ARTISTAS -> {
-                            SearchField(query = library.query, onQueryChange = onQueryChange)
-                            ArtistView(
-                                artists = library.filteredArtists,
-                                onArtistClick = onArtistClick,
-                                modifier = Modifier.weight(1f),
-                                bottomPadding = bottomPadding,
-                            )
-                        }
-
-                        LibraryCategory.ARTISTAS_DEL_ALBUM -> {
-                            SearchField(query = library.query, onQueryChange = onQueryChange)
-                            ArtistView(
-                                artists = library.filteredAlbumArtists,
-                                onArtistClick = onArtistClick,
-                                modifier = Modifier.weight(1f),
-                                bottomPadding = bottomPadding,
-                            )
-                        }
-
-                        LibraryCategory.GENEROS -> {
-                            SearchField(query = library.query, onQueryChange = onQueryChange)
-                            TagCategoryListView(
-                                groups = library.filteredGenres,
-                                fallbackIcon = Icons.Rounded.Category,
-                                onGroupClick = onTagGroupClick,
-                                modifier = Modifier.weight(1f),
-                                bottomPadding = bottomPadding,
-                            )
-                        }
-
-                        LibraryCategory.ANOS -> {
-                            SearchField(query = library.query, onQueryChange = onQueryChange)
-                            TagCategoryListView(
-                                groups = library.filteredYears,
-                                fallbackIcon = Icons.Rounded.DateRange,
-                                onGroupClick = onTagGroupClick,
-                                modifier = Modifier.weight(1f),
-                                bottomPadding = bottomPadding,
-                            )
-                        }
-
-                        LibraryCategory.COMPOSITORES -> {
-                            SearchField(query = library.query, onQueryChange = onQueryChange)
-                            TagCategoryListView(
-                                groups = library.filteredComposers,
-                                fallbackIcon = Icons.Rounded.Piano,
-                                onGroupClick = onTagGroupClick,
-                                modifier = Modifier.weight(1f),
-                                bottomPadding = bottomPadding,
-                            )
-                        }
-
-                        LibraryCategory.LA_COLA -> {
-                            InlineQueueCategoryView(
-                                controller = controller,
-                                snapshot = queueSnapshot,
-                                isPlaying = isPlaying,
-                                bottomPadding = bottomPadding,
-                                onOpenFullQueueEditor = onOpenQueueSheet,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-
-                        LibraryCategory.LISTAS_DE_REPRODUCCION -> {
-                            UpcomingCategoryPlaceholder(
-                                icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
-                                title = "Playlists",
-                                description = "Here you can create your own playlists, save current queues and import M3U/M3U8 files. Their logic will be implemented in the next step.",
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-
-                        LibraryCategory.FAVORITOS -> {
-                            SearchField(query = library.query, onQueryChange = onQueryChange)
-                            if (favoriteTracks.isEmpty() && library.query.isBlank()) {
-                                UpcomingCategoryPlaceholder(
-                                    icon = Icons.Rounded.Favorite,
-                                    title = "No favorites yet",
-                                    description = "Tap the heart in the player to save your favorite local songs here.",
-                                    modifier = Modifier.weight(1f),
+                    // La tarjeta entra escalonada y se hunde al tocarla: el toque responde
+                    // antes de que la categoría termine de abrirse.
+                    itemsIndexed(categories, key = { _, spec -> spec.category.name }) { index, spec ->
+                        RevealItem(index = index, contentKey = spec.category) {
+                                val interaction = remember { MutableInteractionSource() }
+                                LibraryCategoryCard(
+                                    spec = spec,
+                                    interaction = interaction,
+                                    onClick = {
+                                        navDirection = 1
+                                        onSelectCategory(spec.category)
+                                    },
                                 )
-                            } else {
+                        }
+                    }
+                }
+            } else {
+                val requiresLocalScan = activeCategory in setOf(
+                    LibraryCategory.TODAS_LAS_CANCIONES,
+                    LibraryCategory.CARPETAS,
+                    LibraryCategory.ALBUMES,
+                    LibraryCategory.ARTISTAS,
+                    LibraryCategory.ARTISTAS_DEL_ALBUM,
+                    LibraryCategory.GENEROS,
+                    LibraryCategory.ANOS,
+                    LibraryCategory.COMPOSITORES,
+                    LibraryCategory.FAVORITOS,
+                    LibraryCategory.MAS_REPRODUCIDO,
+                )
+
+                when {
+                    requiresLocalScan && !hasPermission -> PermissionCard(onGrant = onRequestPermission)
+                    requiresLocalScan && library.isScanning && library.tracks.isEmpty() -> LoadingLibrary()
+                    requiresLocalScan && library.hasScanned && library.tracks.isEmpty() -> EmptyLibrary(hasQuery = false)
+                    else -> {
+                        when (activeCategory) {
+                            LibraryCategory.TODAS_LAS_CANCIONES -> {
+                                SearchField(query = library.query, onQueryChange = onQueryChange)
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 20.dp, vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            if (library.filteredTracks.isNotEmpty()) {
+                                                onTrackClick(library.filteredTracks, 0)
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Gold, contentColor = Ink),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.weight(1f),
+                                    ) {
+                                        Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Play (${library.filteredTracks.size})", fontWeight = FontWeight.Bold)
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            if (library.filteredTracks.isNotEmpty()) {
+                                                val shuffled = library.filteredTracks.shuffled()
+                                                onTrackClick(shuffled, 0)
+                                            }
+                                        },
+                                        border = BorderStroke(1.dp, Gold.copy(alpha = 0.6f)),
+                                        shape = RoundedCornerShape(12.dp),
+                                    ) {
+                                        Icon(Icons.Rounded.Shuffle, contentDescription = null, tint = Gold, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Shuffle", color = Gold, fontWeight = FontWeight.Bold)
+                                    }
+                                    SortMenuButton(
+                                        current = library.sortMode,
+                                        onSelect = onSortChange,
+                                    )
+                                }
                                 TrackList(
-                                    tracks = favoriteTracks,
+                                    tracks = library.filteredTracks,
                                     currentUri = currentUri,
                                     isPlaying = isPlaying,
                                     controller = controller,
-                                    onTrackClick = { index -> onTrackClick(favoriteTracks, index) },
+                                    onTrackClick = { idx -> onTrackClick(library.filteredTracks, idx) },
+                                    onInspectClick = onInspectTrack,
+                                    onMessage = onMessage,
+                                    modifier = Modifier.weight(1f),
+                                    bottomPadding = bottomPadding,
+                                    indexSort = library.sortMode,
+                                    focusUri = focusUri,
+                                )
+                            }
+
+                            LibraryCategory.CARPETAS -> {
+                                FolderBrowserView(
+                                    currentFolder = library.currentFolder,
+                                    folderPath = library.folderPath,
+                                    currentUri = currentUri,
+                                    isPlaying = isPlaying,
+                                    controller = controller,
+                                    onFolderClick = { folder ->
+                                        navDirection = 1
+                                        onFolderClick(folder)
+                                    },
+                                    onNavigateUp = {
+                                        navDirection = -1
+                                        onNavigateUpFolder()
+                                    },
+                                    onTrackClick = onTrackClick,
                                     onInspectClick = onInspectTrack,
                                     onMessage = onMessage,
                                     modifier = Modifier.weight(1f),
                                     bottomPadding = bottomPadding,
                                 )
                             }
-                        }
 
-                        LibraryCategory.MAS_REPRODUCIDO -> {
-                            SearchField(query = library.query, onQueryChange = onQueryChange)
-                            if (mostPlayedTracks.isEmpty() && library.query.isBlank()) {
-                                UpcomingCategoryPlaceholder(
-                                    icon = Icons.Rounded.Star,
-                                    title = "No plays yet",
-                                    description = "Your local songs will be ranked here as you start listening to them.",
-                                    modifier = Modifier.weight(1f),
-                                )
-                            } else {
-                                TrackList(
-                                    tracks = mostPlayedTracks,
-                                    currentUri = currentUri,
-                                    isPlaying = isPlaying,
-                                    controller = controller,
-                                    onTrackClick = { index -> onTrackClick(mostPlayedTracks, index) },
-                                    onInspectClick = onInspectTrack,
-                                    onMessage = onMessage,
-                                    extraLabel = { track ->
-                                        val count = playCounts[track.uri.toString()] ?: 0
-                                        "$count ${if (count == 1) "play" else "plays"}"
-                                    },
+                            LibraryCategory.ALBUMES -> {
+                                SearchField(query = library.query, onQueryChange = onQueryChange)
+                                AlbumView(
+                                    albums = library.filteredAlbums,
+                                    onAlbumClick = onAlbumClick,
                                     modifier = Modifier.weight(1f),
                                     bottomPadding = bottomPadding,
                                 )
+                            }
+
+                            LibraryCategory.ARTISTAS -> {
+                                SearchField(query = library.query, onQueryChange = onQueryChange)
+                                ArtistView(
+                                    artists = library.filteredArtists,
+                                    onArtistClick = onArtistClick,
+                                    modifier = Modifier.weight(1f),
+                                    bottomPadding = bottomPadding,
+                                )
+                            }
+
+                            LibraryCategory.ARTISTAS_DEL_ALBUM -> {
+                                SearchField(query = library.query, onQueryChange = onQueryChange)
+                                ArtistView(
+                                    artists = library.filteredAlbumArtists,
+                                    onArtistClick = onArtistClick,
+                                    modifier = Modifier.weight(1f),
+                                    bottomPadding = bottomPadding,
+                                )
+                            }
+
+                            LibraryCategory.GENEROS -> {
+                                SearchField(query = library.query, onQueryChange = onQueryChange)
+                                TagCategoryListView(
+                                    groups = library.filteredGenres,
+                                    fallbackIcon = Icons.Rounded.Category,
+                                    onGroupClick = onTagGroupClick,
+                                    modifier = Modifier.weight(1f),
+                                    bottomPadding = bottomPadding,
+                                )
+                            }
+
+                            LibraryCategory.ANOS -> {
+                                SearchField(query = library.query, onQueryChange = onQueryChange)
+                                TagCategoryListView(
+                                    groups = library.filteredYears,
+                                    fallbackIcon = Icons.Rounded.DateRange,
+                                    onGroupClick = onTagGroupClick,
+                                    modifier = Modifier.weight(1f),
+                                    bottomPadding = bottomPadding,
+                                )
+                            }
+
+                            LibraryCategory.COMPOSITORES -> {
+                                SearchField(query = library.query, onQueryChange = onQueryChange)
+                                TagCategoryListView(
+                                    groups = library.filteredComposers,
+                                    fallbackIcon = Icons.Rounded.Piano,
+                                    onGroupClick = onTagGroupClick,
+                                    modifier = Modifier.weight(1f),
+                                    bottomPadding = bottomPadding,
+                                )
+                            }
+
+                            LibraryCategory.LA_COLA -> {
+                                InlineQueueCategoryView(
+                                    controller = controller,
+                                    snapshot = queueSnapshot,
+                                    isPlaying = isPlaying,
+                                    bottomPadding = bottomPadding,
+                                    onOpenFullQueueEditor = onOpenQueueSheet,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+
+                            LibraryCategory.LISTAS_DE_REPRODUCCION -> {
+                                UpcomingCategoryPlaceholder(
+                                    icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
+                                    title = "Playlists",
+                                    description = "Here you can create your own playlists, save current queues and import M3U/M3U8 files. Their logic will be implemented in the next step.",
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+
+                            LibraryCategory.FAVORITOS -> {
+                                SearchField(query = library.query, onQueryChange = onQueryChange)
+                                if (favoriteTracks.isEmpty() && library.query.isBlank()) {
+                                    UpcomingCategoryPlaceholder(
+                                        icon = Icons.Rounded.Favorite,
+                                        title = "No favorites yet",
+                                        description = "Tap the heart in the player to save your favorite local songs here.",
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                } else {
+                                    TrackList(
+                                        tracks = favoriteTracks,
+                                        currentUri = currentUri,
+                                        isPlaying = isPlaying,
+                                        controller = controller,
+                                        onTrackClick = { index -> onTrackClick(favoriteTracks, index) },
+                                        onInspectClick = onInspectTrack,
+                                        onMessage = onMessage,
+                                        modifier = Modifier.weight(1f),
+                                        bottomPadding = bottomPadding,
+                                    )
+                                }
+                            }
+
+                            LibraryCategory.MAS_REPRODUCIDO -> {
+                                SearchField(query = library.query, onQueryChange = onQueryChange)
+                                if (mostPlayedTracks.isEmpty() && library.query.isBlank()) {
+                                    UpcomingCategoryPlaceholder(
+                                        icon = Icons.Rounded.Star,
+                                        title = "No plays yet",
+                                        description = "Your local songs will be ranked here as you start listening to them.",
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                } else {
+                                    TrackList(
+                                        tracks = mostPlayedTracks,
+                                        currentUri = currentUri,
+                                        isPlaying = isPlaying,
+                                        controller = controller,
+                                        onTrackClick = { index -> onTrackClick(mostPlayedTracks, index) },
+                                        onInspectClick = onInspectTrack,
+                                        onMessage = onMessage,
+                                        extraLabel = { track ->
+                                            val count = playCounts[track.uri.toString()] ?: 0
+                                            "$count ${if (count == 1) "play" else "plays"}"
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        bottomPadding = bottomPadding,
+                                    )
+                                }
                             }
                         }
                     }
                 }
+            }
             }
         }
     }
 }
 
+/**
+ * Transición de una navegación dentro de la Biblioteca.
+ *
+ * El recorrido es corto (1/12 del ancho) a propósito: mover una pantalla entera desde el
+ * borde se siente como un empujón y hay que esperar a que termine para leer. Con ~40 dp el
+ * ojo sigue el contenido mientras se mueve, y el cruce se lee como "esto se acomodó" en
+ * vez de "esto cambió".
+ */
+private fun libraryNavTransform(direction: Int): ContentTransform {
+    val travel = { full: Int -> (full / 12).coerceAtLeast(30) }
+    val enter = slideInHorizontally(
+        animationSpec = Motion.enter(Motion.SCREEN_MS),
+        initialOffsetX = { full -> direction * travel(full) },
+    ) + fadeIn(tween(Motion.SCREEN_MS / 2))
+    val exit = slideOutHorizontally(
+        animationSpec = Motion.leave(Motion.SCREEN_MS),
+        targetOffsetX = { full -> -direction * travel(full) },
+    ) + fadeOut(tween(Motion.SCREEN_MS))
+    // `sizeTransform = null` es el valor por defecto de `togetherWith`: las dos pantallas
+    // ocupan el contenedor, así que animar el tamaño sólo costaría layout por frame.
+    return enter togetherWith exit
+}
+
 @Composable
 private fun LibraryCategoryCard(
     spec: CategoryCardSpec,
+    interaction: MutableInteractionSource,
     onClick: () -> Unit,
 ) {
     Surface(
@@ -770,7 +883,10 @@ private fun LibraryCategoryCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .clickable(onClick = onClick),
+            // El hundimiento va ANTES del `clickable` en la cadena para que la capa de la
+            // tarjeta se escale con el dedo, sin mover el punto de toque.
+            .pressScale(interaction)
+            .clickable(interactionSource = interaction, indication = LocalIndication.current, onClick = onClick),
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
@@ -861,57 +977,61 @@ private fun TagCategoryListView(
         ),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(groups, key = { it.name }) { group ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(InkSoft)
-                    .clickable { onGroupClick(group) }
-                    .padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
+        itemsIndexed(groups, key = { _, g -> g.name }) { index, group ->
+            RevealItem(index = index, contentKey = group.name) {
+                val interaction = remember { MutableInteractionSource() }
+                Row(
                     modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(InkElevated),
-                    contentAlignment = Alignment.Center,
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(InkSoft)
+                        .pressScale(interaction, scale = 0.98f)
+                        .clickable(interactionSource = interaction, indication = LocalIndication.current) { onGroupClick(group) }
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(fallbackIcon, contentDescription = null, tint = Gold)
-                    val art = group.artworkUri
-                    if (art != null) {
-                        AsyncImage(
-                            model = art,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(InkElevated),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(fallbackIcon, contentDescription = null, tint = Gold)
+                        val art = group.artworkUri
+                        if (art != null) {
+                            AsyncImage(
+                                model = art,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = group.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Cream,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = group.subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = CreamMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
-                }
-                Spacer(Modifier.width(14.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = group.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Cream,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.NavigateNext,
+                        contentDescription = null,
+                        tint = CreamMuted,
                     )
-                    Text(
-                        text = group.subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = CreamMuted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.NavigateNext,
-                    contentDescription = null,
-                    tint = CreamMuted,
-                )
+            }
             }
         }
     }
@@ -980,7 +1100,7 @@ private fun InlineQueueCategoryView(
             ),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            itemsIndexed(snapshot.items, key = { idx, item -> "${idx}_${item.mediaItem.mediaId}" }) { idx, item ->
+            itemsIndexed(snapshot.items, key = { _, item -> item.mediaItem.mediaId }) { idx, item ->
                 val title = item.track?.title ?: item.mediaItem.mediaMetadata.title?.toString().orEmpty().ifBlank { "Untitled" }
                 val artist = item.track?.effectiveArtist ?: item.mediaItem.mediaMetadata.artist?.toString().orEmpty().ifBlank { "Unknown artist" }
                 Surface(
@@ -989,6 +1109,9 @@ private fun InlineQueueCategoryView(
                     border = if (item.isCurrent) BorderStroke(1.dp, Gold.copy(alpha = 0.6f)) else null,
                     modifier = Modifier
                         .fillMaxWidth()
+                        // La cola se reacomoda en vez de saltar: cambiar el orden o
+                        // quitar una pista ahora se ve como un movimiento.
+                        .animateItem()
                         .clip(RoundedCornerShape(14.dp))
                         .clickable {
                             controller.seekToDefaultPosition(item.index)
@@ -1202,6 +1325,7 @@ internal fun PowerampSearchWorkspace(
     onQueryChange: (String) -> Unit,
     onYtmQueryChange: (String) -> Unit,
     onSearchYtm: () -> Unit,
+    onToggleLyrics: () -> Unit,
     onRequestPermission: () -> Unit,
     onLocalTrackClick: (List<Track>, Int) -> Unit,
     onAlbumClick: (AlbumGroup) -> Unit,
@@ -1289,7 +1413,15 @@ internal fun PowerampSearchWorkspace(
                 PermissionCard(onGrant = onRequestPermission)
             } else {
                 // Pantalla de búsqueda: el campo pide foco y teclado al abrirse.
-                SearchField(query = library.query, onQueryChange = onQueryChange, autoFocus = true)
+                SearchField(
+                    query = library.query,
+                    onQueryChange = onQueryChange,
+                    autoFocus = true,
+                    lyricsOnly = library.lyricsOnly,
+                    onToggleLyrics = onToggleLyrics,
+                    lyricsIndexed = library.lyricsIndexed,
+                    lyricsIndexing = library.lyricsIndexing,
+                )
                 val q = library.query.trim()
                 if (q.isNotEmpty() && library.filteredAlbums.isNotEmpty()) {
                     LazyRow(

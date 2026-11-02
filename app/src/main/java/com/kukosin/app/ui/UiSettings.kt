@@ -2,6 +2,9 @@ package com.kukosin.app.ui
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.MotionDurationScale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,7 +27,20 @@ enum class FontWeightOption(val label: String) {
 data class UiSettings(
     val animationSpeed: AnimationSpeed = AnimationSpeed.NORMAL,
     val fontOption: FontWeightOption = FontWeightOption.DEFAULT,
+    /** Intensidad del blur de las transiciones (Off / Soft / Strong). */
+    val blurStrength: BlurStrength = BlurStrength.SOFT,
+    /**
+     * Radio del blur ya escalado, listo para `Modifier.blur`. Se calcula una sola vez por
+     * cambio de ajuste y no en cada recomposición.
+     */
+    val blur: BlurRadii = DefaultBlurRadii,
 )
+
+/**
+ * Los ajustes visuales disponibles para cualquier `@Composable` sin pasar parámetros por
+ * media app. `AppTheme` publica acá el valor actual (ver `theme/Theme.kt`).
+ */
+val LocalUiSettings = compositionLocalOf { UiSettings() }
 
 /**
  * Preferencias visuales globales.
@@ -38,6 +54,7 @@ object UiSettingsManager {
     private const val PREFS_NAME = "kukosin_ui_settings"
     private const val KEY_ANIMATION_SPEED = "animation_speed"
     private const val KEY_FONT_WEIGHT = "font_weight"
+    private const val KEY_BLUR_STRENGTH = "blur_strength"
 
     private var prefs: SharedPreferences? = null
 
@@ -68,7 +85,18 @@ object UiSettingsManager {
                     ?: FontWeightOption.DEFAULT.name,
             )
         }.getOrDefault(FontWeightOption.DEFAULT)
-        state.value = UiSettings(animationSpeed = speed, fontOption = font)
+        val blur = runCatching {
+            BlurStrength.valueOf(
+                preferences.getString(KEY_BLUR_STRENGTH, BlurStrength.SOFT.name)
+                    ?: BlurStrength.SOFT.name,
+            )
+        }.getOrDefault(BlurStrength.SOFT)
+        state.value = UiSettings(
+            animationSpeed = speed,
+            fontOption = font,
+            blurStrength = blur,
+            blur = blur.radii(),
+        )
         motionScale.scaleFactor = speed.scale
     }
 
@@ -77,6 +105,16 @@ object UiSettingsManager {
         motionScale.scaleFactor = speed.scale
         state.value = state.value.copy(animationSpeed = speed)
     }
+
+    fun setBlurStrength(strength: BlurStrength) {
+        prefs?.edit()?.putString(KEY_BLUR_STRENGTH, strength.name)?.apply()
+        state.value = state.value.copy(blurStrength = strength, blur = strength.radii())
+    }
+
+    /** Acceso desde un `@Composable` sin recolectar el `StateFlow` (lo hace el tema). */
+    @Composable
+    @ReadOnlyComposable
+    fun current(): UiSettings = LocalUiSettings.current
 
     fun setFontOption(option: FontWeightOption) {
         prefs?.edit()?.putString(KEY_FONT_WEIGHT, option.name)?.apply()

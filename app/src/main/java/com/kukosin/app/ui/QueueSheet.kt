@@ -4,8 +4,6 @@ import android.net.Uri
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -467,9 +465,9 @@ fun QueueSheet(
                                                         animate(
                                                             initialValue = dragOffset,
                                                             targetValue = settleOffset,
-                                                            animationSpec = spring(
-                                                                dampingRatio = 0.85f,
+                                                            animationSpec = Motion.snappy(
                                                                 stiffness = 650f,
+                                                                dampingRatio = 0.85f,
                                                             ),
                                                         ) { value, _ ->
                                                             dragOffset = value
@@ -496,9 +494,9 @@ fun QueueSheet(
                                                         animate(
                                                             initialValue = dragOffset,
                                                             targetValue = 0f,
-                                                            animationSpec = spring(
-                                                                dampingRatio = 0.85f,
+                                                            animationSpec = Motion.snappy(
                                                                 stiffness = 650f,
+                                                                dampingRatio = 0.85f,
                                                             ),
                                                         ) { value, _ ->
                                                             dragOffset = value
@@ -1019,12 +1017,12 @@ private fun SwipeableQueueItemRow(
     // Animación de desaparición suave (vanish): fade out + leve escala hacia abajo
     val vanishAlpha by animateFloatAsState(
         targetValue = if (dismissState.dismissDirection != SwipeToDismissBoxValue.Settled) 0f else 1f,
-        animationSpec = tween(220),
+        animationSpec = Motion.leave(),
         label = "queueVanishAlpha",
     )
     val vanishScale by animateFloatAsState(
         targetValue = if (dismissState.dismissDirection != SwipeToDismissBoxValue.Settled) 0.94f else 1f,
-        animationSpec = tween(220),
+        animationSpec = Motion.leave(),
         label = "queueVanishScale",
     )
 
@@ -1096,12 +1094,12 @@ private fun QueueItemRow(
     val track = item.track
     val itemScale by animateFloatAsState(
         targetValue = if (isDragging) 1.04f else 1f,
-        animationSpec = spring(dampingRatio = 0.65f, stiffness = 400f),
+        animationSpec = Motion.snappy(stiffness = 400f, dampingRatio = 0.65f),
         label = "dragScale",
     )
     val itemRotation by animateFloatAsState(
         targetValue = if (isDragging) -1.4f else 0f,
-        animationSpec = spring(dampingRatio = 0.55f, stiffness = 300f),
+        animationSpec = Motion.snappy(stiffness = 300f, dampingRatio = 0.55f),
         label = "dragRotation",
     )
     val animatedTranslationY by animateFloatAsState(
@@ -1109,7 +1107,7 @@ private fun QueueItemRow(
         animationSpec = if (isDragging) {
             snap()
         } else {
-            spring(dampingRatio = 0.8f, stiffness = 550f)
+            Motion.snappy(stiffness = 550f, dampingRatio = 0.8f)
         },
         label = "dragTranslationY",
     )

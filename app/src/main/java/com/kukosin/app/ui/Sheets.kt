@@ -212,6 +212,8 @@ internal fun AudioSignalPathSheet(
     // Estado real del motor: lo que suena, no lo que pedimos.
     val engineStatus by AudioEngineStatus.status.collectAsState()
     val engineInfo = engineStatus.info
+    // Estado del DAC USB (incluye el nivel del atenuador de hardware, si lo tiene).
+    val usbDac = com.kukosin.app.playback.UsbDacManager.current.collectAsState().value
     LaunchedEffect(engineInfo.opened) {
         while (true) {
             AudioEngineStatus.refresh()
@@ -350,12 +352,20 @@ internal fun AudioSignalPathSheet(
                             } else {
                                 "None · the stream goes at the file's rate"
                             },
-                            "Procesadores DSP" to "None (the signal is not processed)",
+                            "DSP Processors" to "None (the signal is not processed)",
                             "Speed / Pitch" to "Disabled (1.0x)",
                         ),
                     )
                 }
-                item { SignalConnectorArrow("AudioTrack / System Sink Transfer") }
+                item {
+                    SignalConnectorArrow(
+                        if (engineStatus.mode == OutputMode.DISABLED) {
+                            "AudioTrack / System Sink Transfer"
+                        } else {
+                            "PCM → Oboe engine (JNI)"
+                        },
+                    )
+                }
                 item {
                     SignalNodeCard(
                         stepNumber = "4",
@@ -371,7 +381,14 @@ internal fun AudioSignalPathSheet(
                         details = listOf(
                             "Audio API" to engineInfo.apiLabel,
                             "Stream format" to engineInfo.streamLabel,
-                            "Usage mode" to if (engineInfo.exclusive) "Exclusive (MMAP)" else "Shared",
+                            "Usage mode" to when {
+                                engineInfo.mmap -> "Exclusive · MMAP"
+                                engineInfo.exclusive -> "Exclusive (HAL)"
+                                else -> "Shared (mixer)"
+                            },
+                            "Latency" to if (engineInfo.latencyMs >= 0) {
+                                "${Math.round(engineInfo.latencyMs)} ms (timestamp)"
+                            } else "—",
                             "Buffer" to if (engineInfo.opened) {
                                 "${engineInfo.bufferFrames} frames · ${Math.round(engineInfo.bufferMs)} ms"
                             } else "—",
@@ -395,7 +412,17 @@ internal fun AudioSignalPathSheet(
                             "Output mode" to engineStatus.mode.label,
                             "Volume" to when {
                                 engineStatus.mode == OutputMode.DISABLED -> "Controlled by the system"
-                                engineStatus.mode.locksVolume -> engineStatus.mode.volumeHint
+                                // En modo USB se usa el atenuador del propio DAC (Feature
+                                // Unit de USB Audio Class): se muestra el nivel real que
+                                // confirmó el hardware, no una suposición de la app.
+                                engineStatus.mode.locksVolume -> {
+                                    val db = usbDac.hardwareVolumeDb
+                                    if (db != null) {
+                                        "DAC hardware · %.1f dB".format(db)
+                                    } else {
+                                        "Fixed at 100 % · this DAC has no USB volume control"
+                                    }
+                                }
                                 engineStatus.mode.usesHardwareVolume -> engineStatus.mode.volumeHint
                                 else -> "${engineStatus.mode.volumeHint} · ${engineInfo.volumePercent} %"
                             },
@@ -419,9 +446,66 @@ internal fun AudioSignalPathSheet(
                         ),
                     )
                 }
+                // Volumen del DAC: sólo cuando el DAC expone su atenuador por USB Audio
+                // Class. Moverlo no toca ni un bit de la pista (el atenuador vive en el
+                // DAC), que es justo lo que hace falta en el camino bit-perfect.
+                val dacDb = usbDac.hardwareVolumeDb
+                val usbMode = engineStatus.mode == OutputMode.USB_DAC ||
+                    engineStatus.mode == OutputMode.DIRECT_DRIVER
+                if (dacDb != null && usbMode) {
+                    item {
+                        DacVolumeRow(dacDb)
+                    }
+                }
             }
             Spacer(Modifier.height(16.dp))
         }
+    }
+}
+
+/**
+ * Control del atenuador del DAC (USB Audio Class).
+ *
+ * El nivel que se muestra es el que el DAC **confirmó** (read-back), no el que se pidió:
+ * si el DAC redondea a su propio paso, la barra se queda donde el hardware quedó.
+ */
+@Composable
+private fun DacVolumeRow(currentDb: Float) {
+    // El recorrido útil del control va de −80 dB al máximo del DAC (FLOOR_DB): el fondo
+    // de un atenuador de −127 dB es inaudible y no tiene sentido ocupando la mitad de la
+    // barra. Mismo criterio que `DacVolume` de BitChord.
+    val floor = com.kukosin.app.playback.DacHardwareVolume.FLOOR_DB
+    val fraction = ((currentDb - floor) / (0f - floor)).coerceIn(0f, 1f)
+    Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                "DAC hardware volume",
+                style = MaterialTheme.typography.labelLarge,
+                color = Cream,
+            )
+            Text(
+                "%.1f dB".format(currentDb),
+                style = MaterialTheme.typography.labelLarge,
+                color = Gold,
+            )
+        }
+        Slider(
+            value = fraction,
+            onValueChange = { target -> com.kukosin.app.playback.UsbDacManager.setHardwareVolume(target) },
+            colors = SliderDefaults.colors(
+                thumbColor = Gold,
+                activeTrackColor = Gold,
+                inactiveTrackColor = InkSoft,
+            ),
+        )
+        Text(
+            "Attenuation applied inside the DAC: not a single sample is scaled.",
+            style = MaterialTheme.typography.bodySmall,
+            color = CreamMuted,
+        )
     }
 }
 

@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+# Binarios de los arneses en host
+tools/flac-tests/build/
+tools/native-tests/build/

@@ -1,8 +1,6 @@
 package com.kukosin.app.ui
 
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -52,9 +50,13 @@ internal fun CompactSeekBar(
     onSeek: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // La barra sigue al reloj con una interpolación corta: antes eran 420 ms lineales, que
+    // con posiciones que llegan cada ~250–400 ms dejaban la barra siempre "persiguiendo" al
+    // reloj. Con una curva suave y más corta el movimiento se lee como continuo y, cuando el
+    // usuario cambia de pista, la barra llega antes.
     val smooth by animateFloatAsState(
         targetValue = progress.coerceIn(0f, 1f),
-        animationSpec = tween(durationMillis = 420, easing = LinearEasing),
+        animationSpec = Motion.quick(MOTION_MS),
         label = "miniProgress",
     )
 
@@ -140,3 +142,10 @@ internal fun CompactSeekBar(
         }
     }
 }
+
+/**
+ * Duración del seguimiento de la barra. Corta a propósito: la posición del reproductor se
+ * refresca varias veces por segundo, así que una animación más larga nunca alcanza el valor
+ * real y la barra se ve arrastrada.
+ */
+private const val MOTION_MS = 180

@@ -3,7 +3,6 @@
 package com.kukosin.app.ui
 
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -246,7 +245,7 @@ private fun EqCurveCard(
     val dim = if (settings.enabled) 1f else 0.45f
     val curveAlpha by animateFloatAsState(
         targetValue = dim,
-        animationSpec = tween(220),
+        animationSpec = Motion.leave(),
         label = "curveAlpha",
     )
 
@@ -518,6 +517,7 @@ private fun BandEditor(
                             EqBandType.LOW_SHELF -> "Low shelf · gentle slope"
                             EqBandType.HIGH_SHELF -> "High shelf · gentle slope"
                             EqBandType.PEAK -> "Constant-Q bell"
+                            else -> "Filter"
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = CreamMuted,

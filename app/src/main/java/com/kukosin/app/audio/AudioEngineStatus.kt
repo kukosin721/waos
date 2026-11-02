@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 data class AudioStatus(
     val info: EngineInfo = EngineInfo(),
     val deviceName: String = "—",
-    val mode: OutputMode = OutputMode.DISABLED,
+    val mode: OutputMode = OutputMode.AUTO,
     /** Un altavoz interno nunca puede ser bit-perfect: tiene su propio DSP y amplificador. */
     val builtinSpeaker: Boolean = false,
     val message: String? = null,
@@ -53,7 +53,7 @@ object AudioEngineStatus {
     private var deviceName: String = "—"
 
     @Volatile
-    private var mode: OutputMode = OutputMode.DISABLED
+    private var mode: OutputMode = OutputMode.AUTO
 
     @Volatile
     private var builtinSpeaker: Boolean = false
@@ -76,7 +76,7 @@ object AudioEngineStatus {
         builtinSpeaker = false
         lastError = null
         // El modo elegido sobrevive al cierre del stream: sirve para explicar por qué
-        // no hay bit-perfect cuando el modo es "Disabled".
+        // no hay bit-perfect cuando el modo es "Disabled" (mezclador).
         _status.value = AudioStatus(mode = mode)
     }
 

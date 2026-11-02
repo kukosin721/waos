@@ -5,7 +5,11 @@ import androidx.core.net.toUri
 import androidx.core.os.bundleOf
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -79,6 +83,11 @@ class YtmException(message: String, cause: Throwable? = null) : Exception(messag
 object YtmService {
     private const val TAG = "KukosinYtm"
     private const val SEARCH_LIMIT = 40
+
+    /** Un listado de búsqueda no cambia en 10 minutos: cachearlo evita re-consultar. */
+    private const val SEARCH_CACHE_TTL_MS = 10 * 60 * 1000L
+
+    private const val SEARCH_CACHE_ENTRIES = 32
     private const val STREAM_CACHE_TTL_MS = 90 * 60 * 1000L
 
     /** Filtro de búsqueda de YouTube Music: solo canciones. */
@@ -105,16 +114,71 @@ object YtmService {
     private val audioCache = ConcurrentHashMap<String, CachedAudio>()
 
     /**
+     * Resultados de búsqueda con caducidad. Antes no se cacheaban y volver a la misma
+     * consulta (o escribir/borrar una letra) disparaba una petición nueva a YouTube
+     * cada vez: eso era gran parte de la lentitud percibida en la búsqueda.
+     */
+    private data class CachedSearch(val results: List<YtmTrack>, val expiresAt: Long)
+
+    private val searchCache = ConcurrentHashMap<String, CachedSearch>()
+
+    /**
+     * Resoluciones en curso, por videoId. Si dos partes de la app piden la misma canción
+     * a la vez, comparten la misma petición en vez de hacer dos (y de pisarse la caché).
+     */
+    private val inFlightAudio = ConcurrentHashMap<String, Deferred<YtmAudio>>()
+
+    private val searchInFlight = ConcurrentHashMap<String, Deferred<List<YtmTrack>>>()
+
+    /**
+     * Ámbito propio para las peticiones compartidas: si quien las pidió cancela (por
+     * ejemplo, el usuario sigue escribiendo), la petición no se corta y el siguiente
+     * que la necesite la aprovecha.
+     */
+    private val requestScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
      * Busca canciones en YouTube Music. Con una consulta vacía devuelve una lista vacía:
      * no se inventan resultados de ejemplo.
      */
     suspend fun search(query: String): List<YtmTrack> = withContext(Dispatchers.IO) {
         val needle = query.trim()
         if (needle.isEmpty()) return@withContext emptyList()
+        val key = needle.lowercase()
+
+        searchCache[key]?.let { cached ->
+            if (cached.expiresAt > System.currentTimeMillis()) {
+                Log.d(TAG, "search \"$needle\": ${cached.results.size} results from cache")
+                return@withContext cached.results
+            }
+            searchCache.remove(key)
+        }
+
+        // Deduplicación: la misma consulta pedida dos veces seguidas comparte resultado.
+        // `putIfAbsent` cierra la carrera entre dos corrutinas que llegan a la vez.
+        val deferred = requestScope.async {
+            val results = searchRemote(needle)
+            searchCache[key] = CachedSearch(results, System.currentTimeMillis() + SEARCH_CACHE_TTL_MS)
+            trimSearchCache()
+            results
+        }
+        val winner = searchInFlight.putIfAbsent(key, deferred)
+        if (winner != null) {
+            deferred.cancel()
+            return@withContext winner.await()
+        }
+        try {
+            deferred.await()
+        } finally {
+            searchInFlight.remove(key, deferred)
+        }
+    }
+
+    private suspend fun searchRemote(needle: String): List<YtmTrack> {
         ensureInitialized()
 
         val startedAt = System.currentTimeMillis()
-        runCatching {
+        return runCatching {
             // Ojo: SearchInfo.getInfo(extractor) NO llama a fetchPage() y devuelve una lista
             // vacía con NPEs silenciosos. Este overload sí hace el fetch antes de parsear.
             val queryHandler = ServiceList.YouTube.searchQHFactory.fromQuery(
@@ -158,6 +222,23 @@ object YtmService {
             audioCache.remove(videoId)
         }
 
+        // Si ya hay una resolución en curso para este video, se espera esa en vez de
+        // pedir otra URL (dos peticiones simultáneas devolvían dos URLs distintas y la
+        // segunda invalidaba la que ya estaba sonando).
+        val deferred = requestScope.async { resolveAudioRemote(videoId, watchUrl) }
+        val winner = inFlightAudio.putIfAbsent(videoId, deferred)
+        if (winner != null) {
+            deferred.cancel()
+            return@withContext winner.await()
+        }
+        try {
+            deferred.await()
+        } finally {
+            inFlightAudio.remove(videoId, deferred)
+        }
+    }
+
+    private suspend fun resolveAudioRemote(videoId: String, watchUrl: String): YtmAudio {
         ensureInitialized()
 
         val startedAt = System.currentTimeMillis()
@@ -191,7 +272,7 @@ object YtmService {
         )
         audioCache[videoId] = CachedAudio(audio, System.currentTimeMillis() + STREAM_CACHE_TTL_MS)
         trimCache()
-        audio
+        return audio
     }
 
     /**
@@ -224,7 +305,10 @@ object YtmService {
             .build()
     }
 
-    fun clearCache() = audioCache.clear()
+    fun clearCache() {
+        audioCache.clear()
+        searchCache.clear()
+    }
 
     //region Audio selection
 
@@ -316,6 +400,15 @@ object YtmService {
                 ContentCountry(country),
             )
             initialized = true
+        }
+    }
+
+    private fun trimSearchCache() {
+        val now = System.currentTimeMillis()
+        searchCache.entries.removeAll { it.value.expiresAt <= now }
+        if (searchCache.size > SEARCH_CACHE_ENTRIES) {
+            searchCache.keys.take(searchCache.size - SEARCH_CACHE_ENTRIES)
+                .forEach { searchCache.remove(it) }
         }
     }
 

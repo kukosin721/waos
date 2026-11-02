@@ -32,6 +32,44 @@ object WaveformExtractor {
     private val cache = linkedMapOf<String, List<Float>>()
     private const val MAX_CACHE = 40
 
+    /**
+     * Caché en disco. Decodificar el archivo completo tarda entre 1 y 3 s en un teléfono
+     * (media pista de 4 min); por eso la onda es lo último que aparecía al abrir una
+     * canción. Se guarda una vez y a partir de ahí se lee en ~1 ms.
+     *
+     * Formato: texto plano con valores separados por coma (180 números cortos → pocos kB),
+     * escrito de forma atómica (tmp + rename).
+     */
+    private fun diskFile(context: Context, key: String): java.io.File {
+        val name = key.hashCode().toUInt().toString(16) + "-" + bars0(key)
+        return java.io.File(java.io.File(context.cacheDir, "waveforms"), "$name.wave")
+    }
+
+    private fun bars0(key: String): String = key.length.toString(16)
+
+    private fun loadFromDisk(context: Context, key: String): List<Float>? = runCatching {
+        val file = diskFile(context, key)
+        if (!file.exists()) return null
+        val values = file.readText()
+            .split(',')
+            .mapNotNull { it.trim().toFloatOrNull() }
+            .filter { it.isFinite() }
+        values.takeIf { it.size >= 8 }
+    }.getOrNull()
+
+    private fun saveToDisk(context: Context, key: String, waveform: List<Float>) {
+        runCatching {
+            val file = diskFile(context, key)
+            file.parentFile?.mkdirs()
+            val tmp = java.io.File(file.parentFile, file.name + ".tmp")
+            tmp.writeText(waveform.joinToString(",") { "%.4f".format(it) })
+            if (!tmp.renameTo(file)) {
+                tmp.copyTo(file, overwrite = true)
+                tmp.delete()
+            }
+        }
+    }
+
     suspend fun getWaveform(
         context: Context,
         track: Track,
@@ -40,11 +78,19 @@ object WaveformExtractor {
         // Solo archivos locales tienen PCM accesible
         if (!track.isLocal) return@withContext null
 
-        val key = track.uri.toString()
+        val key = "${track.uri}|$bars"
         synchronized(cache) { cache[key]?.let { return@withContext it } }
 
+        // 1) Disco: si ya se calculó antes, no se vuelve a decodificar el archivo.
+        loadFromDisk(context, key)?.let { stored ->
+            synchronized(cache) { cache[key] = stored }
+            return@withContext stored
+        }
+
+        // 2) Decodificación real (una sola vez por canción).
         val result = extract(context, track.uri, track.durationMs, bars)
             ?: return@withContext null
+        saveToDisk(context, key, result)
 
         synchronized(cache) {
             if (cache.size >= MAX_CACHE) cache.remove(cache.keys.first())

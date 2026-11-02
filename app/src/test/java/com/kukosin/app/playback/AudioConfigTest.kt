@@ -37,7 +37,7 @@ class AudioConfigTest {
     @Test
     fun defaultsAreSane() {
         val config = AudioConfig()
-        assertEquals(OutputMode.DISABLED, config.outputMode)
+        assertEquals(OutputMode.AUTO, config.outputMode)
         assertEquals(false, config.strictBitPerfect)
         assertEquals(250, config.bufferMs)
         assertEquals(true, config.fades)
@@ -46,13 +46,22 @@ class AudioConfigTest {
 
     @Test
     fun outputModesDescribeWhatTheyDo() {
+        assertEquals(true, OutputMode.AUTO.usesEngine)
         assertEquals(true, OutputMode.AAUDIO_EXCLUSIVE.usesEngine)
         assertEquals(true, OutputMode.DIRECT_DRIVER.usesEngine)
         assertEquals(true, OutputMode.USB_DAC.usesEngine)
         assertEquals(false, OutputMode.DISABLED.usesEngine)
 
+        // El modo automático es el camino por defecto: usa Oboe pero no exige ni
+        // exclusividad ni DAC, para que nunca falle.
+        assertEquals(false, OutputMode.AUTO.requiresExclusive)
+        assertEquals(false, OutputMode.AUTO.requiresDac)
+        assertEquals(OutputMode.AUTO, OutputMode.entriesInOrder.first())
+        assertEquals(OutputMode.AUTO, OutputMode.fromName(null))
+
         assertEquals(true, OutputMode.AAUDIO_EXCLUSIVE.requiresExclusive)
         assertEquals(true, OutputMode.USB_DAC.requiresExclusive)
+        assertEquals(true, OutputMode.USB_DAC.requiresDac)
 
         assertEquals(true, OutputMode.USB_DAC.requiresUsb)
         assertEquals(true, OutputMode.USB_DAC.targetsUsb)

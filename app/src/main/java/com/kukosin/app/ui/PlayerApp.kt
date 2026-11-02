@@ -65,12 +65,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.rememberTransition
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.AnimatedVisibility
@@ -116,6 +112,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -253,14 +250,21 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
     // Al cambiar de sección el dock siempre vuelve.
     LaunchedEffect(activeSection) { dockHidden = false }
 
+    // Indexado de letras en segundo plano: se dispara una sola vez por sesión y sólo
+    // toca los archivos que todavía no están indexados. Es lo que permite que la
+    // búsqueda por letra responda al instante en vez de abrir 10.000 archivos.
+    LaunchedEffect(library.hasScanned, library.tracks.size) {
+        if (library.tracks.isNotEmpty()) viewModel.indexLyrics()
+    }
+
     val dockOffset by animateDpAsState(
         targetValue = if (dockHidden) 132.dp else 0.dp,
-        animationSpec = tween(durationMillis = 240),
+        animationSpec = Motion.enter(Motion.EXIT_MS + 20),
         label = "dockOffset",
     )
     val dockAlpha by animateFloatAsState(
         targetValue = if (dockHidden) 0f else 1f,
-        animationSpec = tween(durationMillis = 200),
+        animationSpec = Motion.leave(),
         label = "dockAlpha",
     )
 
@@ -285,9 +289,24 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
         }
     }
 
-    DisposableEffect(Unit) {
+    // El servicio reconstruye la MediaSession cuando cambia un ajuste de audio (el
+    // reproductor nuevo necesita una sesión nueva). Al liberar la sesión vieja, el
+    // MediaController de la UI recibe `onDisconnected`; antes nadie lo escuchaba, así
+    // que el control quedaba muerto hasta reiniciar la app: la pantalla seguía
+    // mostrando el reproductor pero ningún botón respondía. Reconectar acá arregla
+    // ese bloqueo sin tocar la reproducción.
+    var controllerGeneration by remember { mutableIntStateOf(0) }
+
+    DisposableEffect(controllerGeneration) {
         val token = SessionToken(context, ComponentName(context, PlaybackService::class.java))
-        val future = MediaController.Builder(context, token).buildAsync()
+        var disposed = false
+        val listener = object : MediaController.Listener {
+            override fun onDisconnected(controller: MediaController) {
+                if (disposed) return
+                controllerGeneration++
+            }
+        }
+        val future = MediaController.Builder(context, token).setListener(listener).buildAsync()
         val executor = ContextCompat.getMainExecutor(context)
         future.addListener(
             {
@@ -298,6 +317,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             executor,
         )
         onDispose {
+            disposed = true
             MediaController.releaseFuture(future)
             controller = null
         }
@@ -331,13 +351,14 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
     val audioConfig by viewModel.audioConfig.collectAsStateWithLifecycle()
     val uiSettings by UiSettingsManager.settings.collectAsStateWithLifecycle()
     val routeReady by AudioRoute.isReady.collectAsStateWithLifecycle()
-    // Sin DAC conectado sólo tiene sentido el mezclador del sistema: los modos
-    // exclusivos quedan bloqueados y cualquier valor viejo se vuelve seguro.
+    // Sin DAC conectado los modos exclusivos quedan bloqueados; si había uno guardado
+    // se vuelve al modo automático de Oboe (no al mezclador): la reproducción sigue
+    // pasando por el motor, sólo pierde la exclusividad.
     // Se espera a que AudioRoute haya leído los dispositivos reales; si no, el
     // valor inicial (sin DAC) borraría el modo de un DAC recién conectado.
     LaunchedEffect(output.isDac, routeReady) {
-        if (routeReady && !output.isDac && audioConfig.outputMode != OutputMode.DISABLED) {
-            viewModel.setOutputMode(OutputMode.DISABLED)
+        if (routeReady && !output.isDac && audioConfig.outputMode.requiresDac) {
+            viewModel.setOutputMode(OutputMode.AUTO)
         }
     }
     // El estado del motor refleja el modo elegido incluso cuando no hay stream
@@ -369,10 +390,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
 
     val playPauseScale by animateFloatAsState(
         targetValue = if (playback.isPlaying) 1f else 0.92f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow,
-        ),
+        animationSpec = Motion.gentle(),
         label = "artworkPlayPauseScale",
     )
 
@@ -392,10 +410,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                 initialValue = from,
                 targetValue = target,
                 initialVelocity = initialVelocity.coerceIn(-8f, 8f),
-                animationSpec = spring(
-                    dampingRatio = 0.90f,
-                    stiffness = 380f,
-                ),
+                animationSpec = Motion.snappy(stiffness = 380f, dampingRatio = 0.90f),
             ) { value, _ ->
                 sheetProgress = value.coerceIn(0f, 1f)
             }
@@ -411,7 +426,7 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                 initialValue = playerLyricsProgress,
                 targetValue = target,
                 initialVelocity = initialVelocity.coerceIn(-8f, 8f),
-                animationSpec = spring(dampingRatio = 0.88f, stiffness = 320f),
+                animationSpec = Motion.snappy(stiffness = 320f, dampingRatio = 0.88f),
             ) { value, _ -> playerLyricsProgress = value.coerceIn(0f, 1f) }
             playerLyricsProgress = target
         }
@@ -544,70 +559,78 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                     scaleY = scale
                 },
         ) {
-            when (activeSection) {
-                AppSection.LIBRARY -> PowerampLibraryWorkspace(
-                    library = library,
-                    hasPermission = hasPermission,
-                    output = output,
-                    currentUri = playback.current?.uri,
-                    isPlaying = playback.isPlaying,
-                    controller = controller,
-                    bottomPadding = bottomPadding,
-                    onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
-                    onSelectCategory = viewModel::selectCategory,
-                    onQueryChange = viewModel::onQueryChange,
-                    onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
-                    onRescan = {
-                        if (hasPermission) viewModel.rescan() else permissionLauncher.launch(audioPermissions())
-                    },
-                    onOpenSignalPath = { showSignalPath = true },
-                    onOpenQueueSheet = { showQueueSheet = true },
-                    onTrackClick = { tracks, index -> playTrackList(controller, tracks, index) },
-                    onAlbumClick = viewModel::selectAlbum,
-                    onArtistClick = viewModel::selectArtist,
-                    onTagGroupClick = viewModel::selectTagGroup,
-                    onFolderClick = viewModel::navigateToFolder,
-                    onNavigateUpFolder = { viewModel.navigateUpFolder() },
-                    onInspectTrack = viewModel::setInspectTrack,
-                    onMessage = { msg -> userMessage = msg },
-                    onSortChange = viewModel::setSortMode,
-                    focusUri = libraryFocusUri,
-                )
+            SectionHost(section = activeSection) { section ->
+                when (section) {
+                    AppSection.LIBRARY -> PowerampLibraryWorkspace(
+                        library = library,
+                        hasPermission = hasPermission,
+                        output = output,
+                        currentUri = playback.current?.uri,
+                        isPlaying = playback.isPlaying,
+                        controller = controller,
+                        bottomPadding = bottomPadding,
+                        onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
+                        onSelectCategory = viewModel::selectCategory,
+                        onQueryChange = viewModel::onQueryChange,
+                        onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
+                        onRescan = {
+                            if (hasPermission) viewModel.rescan() else permissionLauncher.launch(audioPermissions())
+                        },
+                        onOpenSignalPath = { showSignalPath = true },
+                        onOpenQueueSheet = { showQueueSheet = true },
+                        onTrackClick = { tracks, index ->
+                            playAndOpen(controller, tracks, index) {
+                                animatePlayerSheet(target = 1f, fromDrag = false)
+                            }
+                        },
+                        onAlbumClick = viewModel::selectAlbum,
+                        onArtistClick = viewModel::selectArtist,
+                        onTagGroupClick = viewModel::selectTagGroup,
+                        onFolderClick = viewModel::navigateToFolder,
+                        onNavigateUpFolder = { viewModel.navigateUpFolder() },
+                        onInspectTrack = viewModel::setInspectTrack,
+                        onMessage = { msg -> userMessage = msg },
+                        onSortChange = viewModel::setSortMode,
+                        focusUri = libraryFocusUri,
+                    )
 
-                AppSection.EQUALIZER -> EqualizerWorkspace(
-                    bottomPadding = bottomPadding,
-                    onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
-                )
+                    AppSection.EQUALIZER -> EqualizerWorkspace(
+                        bottomPadding = bottomPadding,
+                        onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
+                    )
 
-                AppSection.SEARCH -> PowerampSearchWorkspace(
-                    library = library,
-                    hasPermission = hasPermission,
-                    currentUri = playback.current?.uri,
-                    playingYtmId = playingYtmId,
-                    isPlaying = playback.isPlaying,
-                    playbackError = playback.error,
-                    controller = controller,
-                    bottomPadding = bottomPadding,
-                    onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
-                    onQueryChange = viewModel::onQueryChange,
-                    onYtmQueryChange = viewModel::onYtmQueryChange,
-                    onSearchYtm = { viewModel.searchYtm() },
-                    onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
-                    onLocalTrackClick = { tracks, index -> playTrackList(controller, tracks, index) },
-                    onAlbumClick = viewModel::selectAlbum,
-                    onArtistClick = viewModel::selectArtist,
-                    onInspectTrack = viewModel::setInspectTrack,
-                    onYtmTrackClick = { ytmTrack ->
-                        controller?.let { player ->
-                            val queue = library.ytmTracks.map(YtmService::toMediaItem)
-                            val startIndex = library.ytmTracks
-                                .indexOfFirst { it.id == ytmTrack.id }
-                                .coerceAtLeast(0)
-                            QueueManager.playItems(player, queue, startIndex)
-                        }
-                    },
-                    onMessage = { msg -> userMessage = msg },
-                )
+                    AppSection.SEARCH -> PowerampSearchWorkspace(
+                        library = library,
+                        hasPermission = hasPermission,
+                        currentUri = playback.current?.uri,
+                        playingYtmId = playingYtmId,
+                        isPlaying = playback.isPlaying,
+                        playbackError = playback.error,
+                        controller = controller,
+                        bottomPadding = bottomPadding,
+                        onBackToPlayer = { animatePlayerSheet(target = 1f, fromDrag = false) },
+                        onQueryChange = viewModel::onQueryChange,
+                        onYtmQueryChange = viewModel::onYtmQueryChange,
+                        onSearchYtm = { viewModel.searchYtm() },
+                        onToggleLyrics = viewModel::toggleLyricsOnly,
+                        onRequestPermission = { permissionLauncher.launch(audioPermissions()) },
+                        onLocalTrackClick = { tracks, index -> playTrackList(controller, tracks, index) },
+                        onAlbumClick = viewModel::selectAlbum,
+                        onArtistClick = viewModel::selectArtist,
+                        onInspectTrack = viewModel::setInspectTrack,
+                        onYtmTrackClick = { ytmTrack ->
+                            controller?.let { player ->
+                                val queue = library.ytmTracks.map(YtmService::toMediaItem)
+                                val startIndex = library.ytmTracks
+                                    .indexOfFirst { it.id == ytmTrack.id }
+                                    .coerceAtLeast(0)
+                                QueueManager.playItems(player, queue, startIndex)
+                                animatePlayerSheet(target = 1f, fromDrag = false)
+                            }
+                        },
+                        onMessage = { msg -> userMessage = msg },
+                    )
+                }
             }
         }
 
@@ -799,19 +822,23 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
                 onDismiss = { animatePlayerSheet(target = 0f, fromDrag = false) },
                 onOpenSignalPath = { showSignalPath = true },
                 onOpenLibraryShortcut = {
+                    hapticTick()
                     viewModel.openLibraryRoot()
                     activeSection = AppSection.LIBRARY
                     animatePlayerSheet(target = 0f, fromDrag = false)
                 },
                 onOpenEqualizerShortcut = {
+                    hapticTick()
                     activeSection = AppSection.EQUALIZER
                     animatePlayerSheet(target = 0f, fromDrag = false)
                 },
                 onOpenSearchShortcut = {
+                    hapticTick()
                     activeSection = AppSection.SEARCH
                     animatePlayerSheet(target = 0f, fromDrag = false)
                 },
                 onOpenSettingsShortcut = {
+                    hapticTick()
                     showSettings = true
                 },
             )
@@ -909,6 +936,10 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             onToggleFades = { viewModel.setFades(!audioConfig.fades) },
             bufferMs = audioConfig.bufferMs,
             onSelectBufferMs = viewModel::setBufferMs,
+            continuity = audioConfig.continuity,
+            onSelectContinuity = viewModel::setContinuity,
+            volumeCurve = audioConfig.volumeCurve,
+            onSelectVolumeCurve = viewModel::setVolumeCurve,
             decoder = audioConfig.decoder,
             onSelectDecoder = { decoder -> viewModel.setDecoder(decoder) },
             usbPermissionGranted = UsbDacManager.current.value.hasPermission,
@@ -920,6 +951,8 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             onResetAccent = { AccentTheme.reset() },
             animationSpeed = uiSettings.animationSpeed,
             onSelectAnimationSpeed = { UiSettingsManager.setAnimationSpeed(it) },
+            blurStrength = uiSettings.blurStrength,
+            onSelectBlurStrength = { UiSettingsManager.setBlurStrength(it) },
             fontOption = uiSettings.fontOption,
             onSelectFontOption = { UiSettingsManager.setFontOption(it) },
             onRescan = {
@@ -944,7 +977,12 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             currentUri = playback.current?.uri,
             isPlaying = playback.isPlaying,
             controller = controller,
-            onTrackClick = { index -> playTrackList(controller, album.tracks, index) },
+            onTrackClick = { index ->
+                viewModel.selectAlbum(null)
+                playAndOpen(controller, album.tracks, index) {
+                    animatePlayerSheet(target = 1f, fromDrag = false)
+                }
+            },
             onInspectClick = viewModel::setInspectTrack,
             onMessage = { msg -> userMessage = msg },
             onDismiss = { viewModel.selectAlbum(null) },
@@ -957,7 +995,12 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             currentUri = playback.current?.uri,
             isPlaying = playback.isPlaying,
             controller = controller,
-            onTrackClick = { index -> playTrackList(controller, artist.tracks, index) },
+            onTrackClick = { index ->
+                viewModel.selectArtist(null)
+                playAndOpen(controller, artist.tracks, index) {
+                    animatePlayerSheet(target = 1f, fromDrag = false)
+                }
+            },
             onInspectClick = viewModel::setInspectTrack,
             onMessage = { msg -> userMessage = msg },
             onDismiss = { viewModel.selectArtist(null) },
@@ -970,7 +1013,12 @@ fun PlayerApp(viewModel: LibraryViewModel = viewModel()) {
             currentUri = playback.current?.uri,
             isPlaying = playback.isPlaying,
             controller = controller,
-            onTrackClick = { index -> playTrackList(controller, group.tracks, index) },
+            onTrackClick = { index ->
+                viewModel.selectTagGroup(null)
+                playAndOpen(controller, group.tracks, index) {
+                    animatePlayerSheet(target = 1f, fromDrag = false)
+                }
+            },
             onInspectClick = viewModel::setInspectTrack,
             onMessage = { msg -> userMessage = msg },
             onDismiss = { viewModel.selectTagGroup(null) },
@@ -1031,6 +1079,24 @@ internal suspend fun awaitIndexChange(controller: MediaController, previousIndex
 internal fun playTrackList(controller: MediaController?, tracks: List<Track>, index: Int) {
     if (controller == null || tracks.isEmpty()) return
     QueueManager.playTracks(controller, tracks, index)
+}
+
+/**
+ * Reproduce y **abre el reproductor**.
+ *
+ * Antes, tocar una canción en la biblioteca sólo la ponía a sonar: el reproductor
+ * seguía minimizado y parecía que no pasaba nada. Ahora, elegir una canción siempre
+ * lleva al reproductor completo (el mini dock queda abajo para volver a la lista).
+ */
+internal fun playAndOpen(
+    controller: MediaController?,
+    tracks: List<Track>,
+    index: Int,
+    openPlayer: () -> Unit,
+) {
+    if (controller == null || tracks.isEmpty()) return
+    playTrackList(controller, tracks, index)
+    openPlayer()
 }
 
 internal data class PlaybackSnapshot(

@@ -3,11 +3,13 @@ package com.kukosin.app.ui
 import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
+import com.kukosin.app.data.analysis.LyricsIndex
 import androidx.lifecycle.viewModelScope
 import com.kukosin.app.data.AlbumGroup
 import com.kukosin.app.data.ArtistGroup
 import com.kukosin.app.data.FolderNode
 import com.kukosin.app.data.MusicLibrary
+import com.kukosin.app.data.StartupCache
 import com.kukosin.app.data.TagCategoryGroup
 import com.kukosin.app.data.Track
 import com.kukosin.app.data.analysis.AudioAnalysis
@@ -19,6 +21,8 @@ import com.kukosin.app.playback.AudioConfig
 import com.kukosin.app.playback.AudioSettingsManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -43,6 +47,9 @@ enum class LibraryCategory(val title: String) {
     MAS_REPRODUCIDO("Most played"),
 }
 
+private val filteredTracksCache =
+    object : android.util.LruCache<String, List<Track>>(8) {}
+
 data class LibraryUiState(
     val tracks: List<Track> = emptyList(),
     val albums: List<AlbumGroup> = emptyList(),
@@ -63,6 +70,11 @@ data class LibraryUiState(
     val isYtmSearching: Boolean = false,
     val ytmError: String? = null,
     val query: String = "",
+    /** La consulta se aplica también sobre la letra de las canciones. */
+    val lyricsOnly: Boolean = false,
+    /** Letras indexadas / total, para el indicador del buscador. */
+    val lyricsIndexed: Int = 0,
+    val lyricsIndexing: Boolean = false,
     val isScanning: Boolean = false,
     val hasScanned: Boolean = false,
     val error: String? = null,
@@ -75,15 +87,15 @@ data class LibraryUiState(
         get() {
             val needle = query.trim()
             if (needle.isEmpty()) return tracks
-            return tracks.filter { track ->
-                track.title.contains(needle, ignoreCase = true) ||
-                    track.effectiveArtist.contains(needle, ignoreCase = true) ||
-                    track.effectiveAlbumArtist.contains(needle, ignoreCase = true) ||
-                    track.album.contains(needle, ignoreCase = true) ||
-                    track.codecLabel.contains(needle, ignoreCase = true) ||
-                    track.genre.contains(needle, ignoreCase = true) ||
-                    track.composer.contains(needle, ignoreCase = true)
+            filteredTracksCache.get(needle)?.let { return it }
+            val lowered = needle.lowercase()
+            val result = tracks.filter { track ->
+                track.matchesText(lowered) ||
+                    // Sólo se consulta la letra si el usuario escribió el modo "letra".
+                    (lyricsOnly && LyricsIndex.matches(track.uri, LyricsIndex.normalize(lowered)))
             }
+            filteredTracksCache.put(needle, result)
+            return result
         }
 
     val filteredAlbums: List<AlbumGroup>
@@ -136,6 +148,27 @@ data class LibraryUiState(
         }
 }
 
+/**
+ * Compara una pista contra una consulta ya en minúsculas.
+ *
+ * Se hace con `contains(ignoreCase = false)` sobre el texto bajado a minúsculas: es la
+ * variante más barata de `String.contains` (no crea un `CharSequence` por comparación,
+ * que es lo que hacía `ignoreCase = true` en cada campo y por cada tecla).
+ */
+private const val QUERY_DEBOUNCE_MS = 90L
+
+/** YouTube Music tarda cientos de ms por consulta: se espera a que el usuario pare. */
+private const val YTM_QUERY_DEBOUNCE_MS = 400L
+
+private fun Track.matchesText(loweredNeedle: String): Boolean =
+    title.lowercase().contains(loweredNeedle) ||
+        artist.lowercase().contains(loweredNeedle) ||
+        albumArtist.lowercase().contains(loweredNeedle) ||
+        album.lowercase().contains(loweredNeedle) ||
+        codecLabel.lowercase().contains(loweredNeedle) ||
+        genre.lowercase().contains(loweredNeedle) ||
+        composer.lowercase().contains(loweredNeedle)
+
 class LibraryViewModel(application: Application) : AndroidViewModel(application) {
     private val tracks = MutableStateFlow<List<Track>>(emptyList())
     private val albums = MutableStateFlow<List<AlbumGroup>>(emptyList())
@@ -156,6 +189,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     private val isYtmSearching = MutableStateFlow(false)
     private val ytmError = MutableStateFlow<String?>(null)
     private val query = MutableStateFlow("")
+    private val lyricsOnly = MutableStateFlow(false)
+    private val lyricsIndexed = MutableStateFlow(0)
+    private val lyricsIndexing = MutableStateFlow(false)
     private val isScanning = MutableStateFlow(false)
     private val hasScanned = MutableStateFlow(false)
     private val error = MutableStateFlow<String?>(null)
@@ -165,8 +201,10 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         runCatching { LibrarySort.valueOf(sortPrefs.getString(KEY_SORT, null) ?: "") }
             .getOrDefault(LibrarySort.TITULO),
     )
+    private var scanJob: Job? = null
     private var analysisJob: Job? = null
     private var ytmSearchJob: Job? = null
+    private var ytmDebounceJob: Job? = null
 
     private val combinedState: Flow<LibraryUiState> = combine(
         combine(tracks, albums, artists, rootFolder, folderPath) { tr, al, ar, rf, fp ->
@@ -184,7 +222,18 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         combine(query, isScanning, hasScanned, error, ytmError) { q, sc, hasSc, err, yErr ->
             Tuple5(q, sc, hasSc, err, yErr)
         },
-    ) { (tr, al, ar, rf, fp), (aar, gn, yr, cp), (cat, sal, sar, stg), (yTr, yQ, ySc, ins), (q, sc, hasSc, err, yErr) ->
+    ) { t1, t2, t3, t4, t5 ->
+        Tuple5(t1, t2, t3, t4, t5)
+    }.combine(
+        combine(lyricsOnly, lyricsIndexed, lyricsIndexing) { lo, li, lix ->
+            Tuple3(lo, li, lix)
+        }
+    ) { (t1, t2, t3, t4, t5), (lyrOnly, lyrIdx, lyrIdxing) ->
+        val (tr, al, ar, rf, fp) = t1
+        val (aar, gn, yr, cp) = t2
+        val (cat, sal, sar, stg) = t3
+        val (yTr, yQ, ySc, ins) = t4
+        val (q, sc, hasSc, err, yErr) = t5
         LibraryUiState(
             tracks = tr,
             albums = al,
@@ -205,6 +254,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
             isYtmSearching = ySc,
             ytmError = yErr,
             query = q,
+            lyricsOnly = lyrOnly,
+            lyricsIndexed = lyrIdx,
+            lyricsIndexing = lyrIdxing,
             isScanning = sc,
             hasScanned = hasSc,
             error = err,
@@ -282,6 +334,7 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     /** "Rescan": tira la caché de sondeo (memoria + disco) y reconstruye. */
     fun rescan() {
         MusicLibrary.invalidateProbeCache(getApplication())
+        StartupCache.clear(getApplication())
         refresh()
     }
 
@@ -295,6 +348,14 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
     fun toggleStrictBitPerfect() {
         AudioSettingsManager.setStrictBitPerfect(!audioConfig.value.strictBitPerfect)
+    }
+
+    fun setContinuity(preset: com.kukosin.app.playback.ContinuityPreset) {
+        com.kukosin.app.playback.AudioSettingsManager.setContinuity(preset)
+    }
+
+    fun setVolumeCurve(curve: Int) {
+        com.kukosin.app.playback.AudioSettingsManager.setVolumeCurve(curve)
     }
 
     fun setBufferMs(ms: Int) {
@@ -346,12 +407,93 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private var queryJob: Job? = null
+    private var lyricsIndexJob: Job? = null
+
+    /**
+     * La consulta se aplica con un pequeño retardo (90 ms): escribir rápido ya no
+     * dispara 8 filtrados completos, sólo uno. El texto del campo se actualiza al
+     * instante en la UI (es estado local de Compose), así que no se siente el retraso.
+     */
     fun onQueryChange(value: String) {
+        queryJob?.cancel()
+        queryJob = viewModelScope.launch {
+            delay(QUERY_DEBOUNCE_MS)
+            query.value = value
+        }
+    }
+
+    /** Aplica el texto ahora (al pulsar "buscar" o elegir una sugerencia). */
+    fun onQueryCommit(value: String) {
+        queryJob?.cancel()
         query.value = value
     }
 
+    /**
+     * Activa/desactiva la búsqueda dentro de las letras. Al activarla se indexa la
+     * biblioteca en segundo plano la primera vez (sólo las canciones que falten).
+     */
+    fun setLyricsOnly(enabled: Boolean) {
+        lyricsOnly.value = enabled
+        if (enabled) indexLyrics()
+    }
+
+    fun toggleLyricsOnly() = setLyricsOnly(!lyricsOnly.value)
+
+    fun indexLyrics() {
+        if (lyricsIndexJob?.isActive == true) return
+        lyricsIndexJob = viewModelScope.launch {
+            lyricsIndexing.value = true
+            try {
+                val all = tracks.value
+                withContext(Dispatchers.IO) {
+                    // Mapa uri -> ruta: antes era `firstOrNull` por cada pista (O(n²)).
+                    val paths = all.associate { it.uri.toString() to it.filePath }
+                    LyricsIndex.ensureIndexed(
+                        context = getApplication(),
+                        tracks = all.map { it.uri },
+                        filePathFor = { uri -> paths[uri.toString()].orEmpty() },
+                        onProgress = { indexed, total ->
+                            lyricsIndexed.value = LyricsIndex.indexedCount
+                            if (indexed % 16 == 0 || indexed == total) {
+                                lyricsIndexing.value = indexed < total
+                            }
+                        },
+                    )
+                }
+                lyricsIndexed.value = LyricsIndex.indexedCount
+            } finally {
+                lyricsIndexing.value = false
+                // La consulta cacheada pudo quedarse corta: se invalida.
+                filteredTracksCache.evictAll()
+            }
+        }
+    }
+
+    /**
+     * Consulta de YouTube Music con debounce y búsqueda automática.
+     *
+     * Antes había que pulsar "buscar": escribir se sentía trabado y no pasaba nada hasta
+     * tocar el botón. Ahora se espera a que el usuario deje de teclear (400 ms) y la
+     * búsqueda sale sola; el botón sigue existiendo para forzarla al instante.
+     */
     fun onYtmQueryChange(value: String) {
         ytmQuery.value = value
+        // Job aparte del de búsqueda: `searchYtm` cancela `ytmSearchJob`, y si el debounce
+        // viviera en ese mismo job se cancelaría a sí mismo.
+        ytmDebounceJob?.cancel()
+        val needle = value.trim()
+        if (needle.length < 2) {
+            if (needle.isEmpty()) {
+                ytmTracks.value = emptyList()
+                ytmError.value = null
+            }
+            return
+        }
+        ytmDebounceJob = viewModelScope.launch {
+            delay(YTM_QUERY_DEBOUNCE_MS)
+            searchYtm(needle)
+        }
     }
 
     fun searchYtm(q: String = ytmQuery.value) {
@@ -381,9 +523,19 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun refresh() {
-        viewModelScope.launch {
+        if (scanJob?.isActive == true) return
+        scanJob = viewModelScope.launch {
             isScanning.value = true
             error.value = null
+            // 1) Si hay una foto del último escaneo, se dibuja YA (sin esperar a MediaStore
+            // ni al sondeo). Es una lista optimista: el escaneo real la reemplaza abajo.
+            if (!hasScanned.value && tracks.value.isEmpty()) {
+                val snapshot = StartupCache.loadTracks(getApplication())
+                if (snapshot.isNotEmpty() && tracks.value.isEmpty()) {
+                    updateState(snapshot)
+                    hasScanned.value = true
+                }
+            }
             try {
                 val scanned = MusicLibrary.scan(getApplication())
                 updateState(scanned)
@@ -392,6 +544,9 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 
                 val enriched = MusicLibrary.enrich(getApplication(), scanned)
                 updateState(enriched)
+                // 2) La foto se guarda recién con el resultado completo: si el proceso muere
+                // a mitad del escaneo, la próxima apertura no arranca con datos a medias.
+                StartupCache.save(getApplication(), enriched)
             } catch (throwable: Throwable) {
                 error.value = throwable.message ?: "Could not scan the library"
                 hasScanned.value = true
@@ -425,5 +580,6 @@ class LibraryViewModel(application: Application) : AndroidViewModel(application)
 /** Clave de prefs del criterio de orden elegido. */
 private const val KEY_SORT = "library_sort_mode"
 
+private data class Tuple3<A, B, C>(val a: A, val b: B, val c: C)
 private data class Tuple4<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 private data class Tuple5<A, B, C, D, E>(val a: A, val b: B, val c: C, val d: D, val e: E)

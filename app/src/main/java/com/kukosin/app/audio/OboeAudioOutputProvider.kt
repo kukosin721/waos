@@ -5,6 +5,7 @@ import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.audio.AudioOutput
 import androidx.media3.exoplayer.audio.AudioOutputProvider
+import androidx.media3.exoplayer.audio.AudioTrackAudioOutputProvider
 import com.kukosin.app.playback.AudioRoute
 import com.kukosin.app.playback.AudioSettingsManager
 import com.kukosin.app.playback.BitPerfectMixer
@@ -31,25 +32,30 @@ class OboeAudioOutputProvider(
     override fun getFormatSupport(
         formatConfig: AudioOutputProvider.FormatConfig,
     ): AudioOutputProvider.FormatSupport {
-        val encoding = formatConfig.format.pcmEncoding
+        val format = formatConfig.format
+        val encoding = format.pcmEncoding
         val supported = encoding == C.ENCODING_PCM_16BIT ||
             encoding == C.ENCODING_PCM_24BIT ||
             encoding == C.ENCODING_PCM_32BIT ||
             encoding == C.ENCODING_PCM_FLOAT
-        return if (supported) {
-            AudioOutputProvider.FormatSupport.Builder()
-                .setFormatSupportLevel(AudioOutputProvider.FORMAT_SUPPORTED_DIRECTLY)
-                .build()
-        } else {
-            AudioOutputProvider.FormatSupport.UNSUPPORTED
+        // Ojo: el motor abre el stream con EL MISMO número de canales de la pista
+        // (`setChannelConversionAllowed(false)`), y el HAL de Android sólo expone
+        // configuraciones de altavoz conocidas. Sólo se promete lo que se puede cumplir
+        // de verdad (>2 canales lo resuelve el mezclador de Media3, no este motor).
+        val channelCount = format.channelCount
+        if (!supported || channelCount !in 1..MAX_CHANNELS) {
+            return AudioOutputProvider.FormatSupport.UNSUPPORTED
         }
+        return AudioOutputProvider.FormatSupport.Builder()
+            .setFormatSupportLevel(AudioOutputProvider.FORMAT_SUPPORTED_DIRECTLY)
+            .build()
     }
 
     override fun getOutputConfig(
         formatConfig: AudioOutputProvider.FormatConfig,
     ): AudioOutputProvider.OutputConfig {
         val format = formatConfig.format
-        val channels = format.channelCount.coerceAtLeast(1)
+        val channels = format.channelCount.coerceIn(1, MAX_CHANNELS)
         val channelMask = if (channels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO
         val encoding = when (format.pcmEncoding) {
             C.ENCODING_PCM_16BIT, C.ENCODING_PCM_24BIT, C.ENCODING_PCM_32BIT, C.ENCODING_PCM_FLOAT ->
@@ -68,15 +74,21 @@ class OboeAudioOutputProvider(
     override fun getAudioOutput(config: AudioOutputProvider.OutputConfig): AudioOutput {
         val settings = AudioSettingsManager.configState.value
         val target = AudioRoute.deviceFor(mode)
-        if (mode.requiresUsb && target == null) {
-            AudioEngineStatus.error(
-                "No USB DAC connected: using the default device. " +
-                    "Connect the DAC and try again.",
-            )
+
+        // Fail-closed: si el modo apunta a un DAC USB y no hay DAC, NO se abre el
+        // altavoz interno a escala completa (era lo que pasaba antes: se avisaba y se
+        // seguía con device 0). La UI ya bloquea estos modos sin DAC; esto cierra la
+        // última puerta, que estaba en el camino nativo.
+        if (mode.targetsUsb && target == null) {
+            val message = "No USB DAC available for ${mode.label}. " +
+                "Connect it and try again, or pick the built-in output."
+            AudioEngineStatus.error(message)
+            throw AudioOutputProvider.InitializationException(IllegalStateException(message))
         }
 
-        val channels = Integer.bitCount(config.channelMask).coerceAtLeast(1)
+        val channels = Integer.bitCount(config.channelMask).coerceIn(1, MAX_CHANNELS)
         val sourceFormat = PcmFormat.fromMedia3Encoding(config.encoding)
+        val requireDevice = mode.targetsUsb && target != null
 
         fun open(deviceId: Int): AudioEngine {
             val engine = AudioEngine()
@@ -88,8 +100,12 @@ class OboeAudioOutputProvider(
                     deviceId = deviceId,
                     strictBitPerfect = settings.strictBitPerfect,
                     requireExclusive = mode.requiresExclusive,
+                    // Sin DAC no se cae a otro dispositivo en modo USB: mejor fallar.
+                    requireDevice = requireDevice,
                     bufferMs = settings.bufferMs,
                     fades = settings.fades,
+                    prerollMs = settings.prerollMs,
+                    volumeCurve = settings.volumeCurve,
                 ),
             )
             if (!result.isOk) {
@@ -101,32 +117,65 @@ class OboeAudioOutputProvider(
                     ),
                 )
             }
+            // `configure()` sólo acepta la configuración: la apertura real ocurre en un
+            // hilo nativo propio (para no bloquear el hilo de audio al negociar
+            // exclusividad). Acá se espera el resultado —este método corre en el hilo de
+            // reproducción de Media3, nunca en el principal— para poder informar el
+            // error en la UI y reintentar con otro dispositivo si corresponde.
+            val opened = engine.awaitOpen(OPEN_TIMEOUT_MS)
+            if (!opened.isOk) {
+                engine.close()
+                throw AudioOutputProvider.InitializationException(
+                    IllegalStateException(
+                        "Oboe could not open ${sourceFormat.bits}-bit @ ${config.sampleRate} Hz: " +
+                            opened.description,
+                    ),
+                )
+            }
+            // La curva se aplica después de abrir: `configure()` deja el stream listo y esto
+            // sólo cambia cómo se interpreta el volumen (al 100 % da exactamente 1.0, así que
+            // el bit-perfect no depende de la curva).
+            engine.setVolumeCurve(settings.volumeCurve)
             return engine
         }
 
         val engine = try {
-            open(target?.id ?: 0)
-        } catch (first: AudioOutputProvider.InitializationException) {
-            // El id puede quedar viejo si el DAC se reconectó: reintento por defecto.
-            if (target == null) {
-                AudioEngineStatus.error(
-                    "Could not open the output (${sourceFormat.bits}-bit @ ${config.sampleRate} Hz). " +
-                        "Try " +
-                        if (mode.requiresExclusive) "another output mode or disable strict mode." else
-                            "another output mode.",
-                )
-                throw first
-            }
             try {
-                open(0)
-            } catch (second: AudioOutputProvider.InitializationException) {
-                AudioEngineStatus.error(
-                    "Could not open ${deviceLabel()} (${sourceFormat.bits}-bit @ " +
-                        "${config.sampleRate} Hz): ${second.message}. " +
-                        "This mode needs an exclusive stream the device is not providing.",
-                )
-                throw second
+                open(target?.id ?: 0)
+            } catch (first: AudioOutputProvider.InitializationException) {
+                // El id puede quedar viejo si el DAC se reconectó: sólo en ese caso tiene
+                // sentido reintentar por defecto, y nunca cuando la ruta pedida es USB.
+                if (target == null || requireDevice) {
+                    AudioEngineStatus.error(
+                        "Could not open the output (${sourceFormat.bits}-bit @ ${config.sampleRate} Hz). " +
+                            if (mode.requiresExclusive) "Try another output mode or disable strict mode." else
+                                "Try another output mode.",
+                    )
+                    throw first
+                }
+                try {
+                    open(0)
+                } catch (second: AudioOutputProvider.InitializationException) {
+                    AudioEngineStatus.error(
+                        "Could not open ${deviceLabel()} (${sourceFormat.bits}-bit @ " +
+                            "${config.sampleRate} Hz): ${second.message}. " +
+                            "This mode needs an exclusive stream the device is not providing.",
+                    )
+                    throw second
+                }
             }
+        } catch (failure: AudioOutputProvider.InitializationException) {
+            // Red de seguridad del modo automático: Oboe se intentó primero (es el
+            // camino de mayor fidelidad), pero si este equipo no puede abrir el
+            // stream —HAL viejo, formato no soportado, salida ocupada— la música
+            // sigue por AudioTrack en vez de cortarse. Los modos exclusivos NO caen
+            // acá a propósito: ahí el fallo se informa.
+            if (mode != OutputMode.AUTO) throw failure
+            AudioEngineStatus.error(
+                "Oboe could not open this output (${failure.message ?: "unknown error"}). " +
+                    "Using the Android mixer for this track.",
+            )
+            return mixerFallback(config) ?: throw failure
         }
 
         // Hint al mezclador de Android 14+ por si el stream terminó compartido.
@@ -140,7 +189,26 @@ class OboeAudioOutputProvider(
         val builtinSpeaker = target?.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER ||
             AudioRoute.current.value.isBuiltin
         AudioEngineStatus.attach(engine, deviceLabel(), mode, builtinSpeaker)
-        return OboeAudioOutput(engine, config.sampleRate, mode, AudioRoute.appContext)
+        return OboeAudioOutput(
+            engine,
+            config.sampleRate,
+            mode,
+            AudioRoute.appContext,
+            fastTransitions = settings.fastTransitions,
+        )
+    }
+
+    private companion object {
+        /** Tope de espera de la apertura: corto, para no colgar la reproducción. */
+        const val OPEN_TIMEOUT_MS = 2_000
+
+        /**
+         * Canales que el motor puede abrir de verdad. El HAL de Android negocia
+         * mono/estéreo (y 5.1/7.1 sólo con máscaras concretas que AAudio no expone
+         * desde el builder en < API 32), así que por encima de esto se deja que
+         * Media3 haga el downmix.
+         */
+        const val MAX_CHANNELS = 2
     }
 
     private fun deviceLabel(): String {
@@ -155,6 +223,26 @@ class OboeAudioOutputProvider(
         }
     }
 
+    /**
+     * Proveedor de AudioTrack que se usa sólo si el modo automático no pudo abrir
+     * Oboe. Se crea una vez y se libera con el provider.
+     */
+    private var mixerFallbackProvider: AudioTrackAudioOutputProvider? = null
+
+    private fun mixerFallback(config: AudioOutputProvider.OutputConfig): AudioOutput? {
+        val context = AudioRoute.appContext ?: return null
+        val provider = mixerFallbackProvider
+            ?: AudioTrackAudioOutputProvider.Builder(context).build().also { mixerFallbackProvider = it }
+        return try {
+            provider.getAudioOutput(config)
+        } catch (failure: AudioOutputProvider.InitializationException) {
+            AudioEngineStatus.error(
+                "AudioTrack also failed to open this output: ${failure.message ?: "unknown error"}",
+            )
+            null
+        }
+    }
+
     override fun addListener(listener: AudioOutputProvider.Listener) {
         listeners.add(listener)
     }
@@ -166,5 +254,7 @@ class OboeAudioOutputProvider(
     override fun release() {
         listeners.clear()
         AudioEngineStatus.detach()
+        mixerFallbackProvider?.release()
+        mixerFallbackProvider = null
     }
 }

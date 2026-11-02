@@ -2,6 +2,8 @@ package com.kukosin.app.playback
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
@@ -27,19 +29,37 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.channels.Channel
 import java.io.IOException
 
 @UnstableApi
 class PlaybackService : MediaSessionService() {
     private companion object {
         const val TAG = "KukosinPlayback"
+
+        /**
+         * Cambiar de modo de salida y después el buffer (o tocar dos ajustes seguidos)
+         * generaba dos reconstrucciones con dos aperturas de stream. Con el debounce se
+         * hace una sola, 350 ms después del último cambio.
+         */
+        const val SETTINGS_DEBOUNCE_MS = 350L
+
+        /**
+         * Cuánto audio de la pista siguiente se deja decodificado y listo. 12 s alcanzan
+         * para que el cambio de pista no tenga que esperar al decoder; más que eso sólo
+         * ocupa memoria sin que se note.
+         */
+        const val PRELOAD_AHEAD_US = 12_000_000L
     }
 
     private var mediaSession: MediaSession? = null
@@ -75,6 +95,7 @@ class PlaybackService : MediaSessionService() {
         // El EQ debe estar cargado antes de construir el sink: el procesador lee su estado
         // desde acá.
         com.kukosin.app.eq.EqManager.init(this)
+        startRecreateWorker()
         recreatePlayer()
 
         // Sólo se reconstruye el player si cambió algo que afecta al AUDIO. Antes se
@@ -84,12 +105,46 @@ class PlaybackService : MediaSessionService() {
             .drop(1)
             .map { it.audioSignature }
             .distinctUntilChanged()
+            .debounce(SETTINGS_DEBOUNCE_MS)
             .onEach { recreatePlayer() }
+            .catch { throwable -> Log.e(TAG, "settings stream failed", throwable) }
             .launchIn(serviceScope)
     }
 
     private var audioRetries: Int = 0
     private var retryJob: Job? = null
+    private var retrying = false
+
+    /**
+     * Una sola reconstrucción a la vez, y **como máximo una pendiente**.
+     *
+     * Antes había una bandera `recreating` con recursión al terminar: si el build
+     * fallaba y quedaba un pedido pendiente, se llamaba a `recreatePlayer()` otra vez
+     * desde el `finally`, y eso podía encadenarse sin fin bloqueando el hilo principal.
+     * Un `Channel` conflado resuelve lo mismo sin recursión: los pedidos que llegan
+     * mientras se reconstruye se descartan salvo el último.
+     */
+    private var recreating = false
+    private val recreateRequests = Channel<Unit>(Channel.CONFLATED)
+
+    private fun startRecreateWorker() {
+        serviceScope.launch {
+            for (request in recreateRequests) {
+                if (recreating) continue
+                recreating = true
+                try {
+                    rebuildPlayerOnMain()
+                } catch (throwable: Throwable) {
+                    Log.e(TAG, "no se pudo reconstruir el reproductor", throwable)
+                    AudioEngineStatus.error(
+                        "Could not restart the audio engine: ${throwable.message ?: "unknown error"}",
+                    )
+                } finally {
+                    recreating = false
+                }
+            }
+        }
+    }
 
     /**
      * Recuperación de la salida de audio: DAC desenchufado a mitad de tema, stream exclusivo
@@ -108,21 +163,54 @@ class PlaybackService : MediaSessionService() {
                     "Playback error (${error.errorCode}): ${error.message ?: "no details"}"
                 },
             )
-            if (!audioSinkFailure || audioRetries >= 1) return
+            if (!audioSinkFailure || audioRetries >= 1 || retrying) return
             audioRetries++
+            retrying = true
             retryJob?.cancel()
             retryJob = serviceScope.launch {
                 delay(300)
-                if ((player?.mediaItemCount ?: 0) > 0) recreatePlayer()
+                try {
+                    if ((player?.mediaItemCount ?: 0) > 0) recreatePlayer()
+                } finally {
+                    retrying = false
+                }
             }
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (isPlaying) audioRetries = 0
         }
+
+        // No se reinicia el contador en STATE_READY: un sink roto puede pasar por READY
+        // y fallar en el primer write. Si se resetea ahí, el reintento se repite para
+        // siempre (READY → error → rebuild → READY → error) y la app queda reconstruyendo
+        // el reproductor sin parar. El contador sólo se limpia cuando la reproducción
+        // realmente arrancó (arriba), que es la señal de que la salida funciona.
     }
 
+    /**
+     * Pide una reconstrucción del reproductor conservando cola, pista y posición.
+     *
+     * El pedido entra a un `Channel` conflado y lo procesa [startRecreateWorker] en el
+     * hilo principal, de a uno. Nada se libera hasta que el reproductor nuevo está
+     * construido: si el build falla, la reproducción actual sigue intacta.
+     */
     private fun recreatePlayer() {
+        recreateRequests.trySend(Unit)
+    }
+
+    /**
+     * Reconstrucción en el hilo principal (ExoPlayer exige crear y liberar en su hilo
+     * de aplicación). El orden importa:
+     *
+     * 1. Se construyen el reproductor y la sesión **nuevos**.
+     * 2. Se publican (`player` / `mediaSession`) sin dejar un hueco en el que el
+     *    servicio se quede sin sesión.
+     * 3. Lo viejo se libera en el siguiente turno del hilo principal, fuera del frame
+     *    del toque que cambió el ajuste. `release()` espera al hilo de audio y, con
+     *    Oboe, puede tardar; hacerlo dentro del clic era lo que congelaba la pantalla.
+     */
+    private fun rebuildPlayerOnMain() {
         val currentItems = player?.let { p ->
             val count = p.mediaItemCount
             if (count == 0) return@let null
@@ -133,12 +221,10 @@ class PlaybackService : MediaSessionService() {
             Triple(list, index, pos to isPlaying)
         }
 
-        player?.release()
-        mediaSession?.release()
-
+        val mediaSourceFactory = buildMediaSourceFactory()
         val newPlayer = ExoPlayer.Builder(this)
             .setRenderersFactory(HiFiRenderersFactory(this))
-            .setMediaSourceFactory(buildMediaSourceFactory())
+            .setMediaSourceFactory(mediaSourceFactory)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -152,12 +238,48 @@ class PlaybackService : MediaSessionService() {
             .build()
         newPlayer.volume = 1f
 
+        // Precarga de la pista siguiente: con el buffer de carga lleno de antemano, el
+        // "next" no arranca desde cero (ni el decoder ni el extractor pagan su costo en el
+        // momento en que el usuario pide el salto). El límite es de tiempo, no de cantidad:
+        // precargar más de una pista en una cola larga sólo gasta batería y RAM.
+        newPlayer.setPreloadConfiguration(
+            androidx.media3.exoplayer.ExoPlayer.PreloadConfiguration(
+                /* targetPreloadDurationUs= */ PRELOAD_AHEAD_US,
+            ),
+        )
+
         AudioRoute.attach(this, newPlayer)
         newPlayer.addListener(prefetchListener)
         newPlayer.addListener(playbackCountListener)
         newPlayer.addListener(audioErrorListener)
-        mediaSession = MediaSession.Builder(this, newPlayer).build()
+
+        // La sesión nueva se crea antes de tocar la vieja. Si el builder falla, el
+        // reproductor nuevo se descarta y la sesión actual sigue viva.
+        //
+        // El ID por defecto es la cadena vacía y Media3 sólo permite una sesión con
+        // ese ID por proceso. Como acá conviven un instante la vieja y la nueva, cada
+        // una necesita su propio ID; si no, `build()` lanza "Session ID must be
+        // unique" y el cambio de ajuste deja el reproductor sin sesión.
+        val newSession = try {
+            MediaSession.Builder(this, newPlayer)
+                .setId("kukosin-${System.nanoTime()}")
+                .build()
+        } catch (throwable: Throwable) {
+            runCatching { newPlayer.release() }
+            throw throwable
+        }
+
+        val oldPlayer = player
+        val oldSession = mediaSession
+
+        mediaSession = newSession
         player = newPlayer
+
+        oldPlayer?.let { old ->
+            old.removeListener(prefetchListener)
+            old.removeListener(playbackCountListener)
+            old.removeListener(audioErrorListener)
+        }
 
         if (currentItems != null && currentItems.first.isNotEmpty()) {
             val (items, index, posPlaying) = currentItems
@@ -172,6 +294,13 @@ class PlaybackService : MediaSessionService() {
                 newPlayer.play()
             }
         }
+
+        // Fuera del frame actual: la UI ya dibujó el ajuste nuevo y el control sigue
+        // conectado a la sesión nueva mientras el reproductor viejo termina de cerrar.
+        Handler(Looper.getMainLooper()).post {
+            runCatching { oldPlayer?.release() }
+            runCatching { oldSession?.release() }
+        }
     }
 
     /**
@@ -185,7 +314,11 @@ class PlaybackService : MediaSessionService() {
         val resolving = ResolvingDataSource.Factory(DefaultDataSource.Factory(this)) { dataSpec ->
             resolveStreamDataSpec(dataSpec)
         }
-        return DefaultMediaSourceFactory(this).setDataSourceFactory(resolving)
+        val default = DefaultMediaSourceFactory(this).setDataSourceFactory(resolving)
+        // Los FLAC locales se decodifican con el decodificador propio (PCM entero en el
+        // ancho nativo del archivo). Sin esto, un FLAC de 24 bits pasa por MediaCodec y se
+        // queda en float o en 16 bits antes de llegar al DAC.
+        return LocalFlacMediaSourceFactory(this, resolving, default)
     }
 
     private fun resolveStreamDataSpec(dataSpec: DataSpec): DataSpec {
@@ -257,6 +390,7 @@ class PlaybackService : MediaSessionService() {
     override fun onDestroy() {
         settingsJob?.cancel()
         retryJob?.cancel()
+        serviceScope.cancel()
         player?.removeListener(audioErrorListener)
         player?.removeListener(prefetchListener)
         player?.removeListener(playbackCountListener)

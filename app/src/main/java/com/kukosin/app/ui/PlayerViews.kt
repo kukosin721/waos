@@ -64,15 +64,15 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.rememberTransition
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
@@ -121,6 +121,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -374,6 +375,9 @@ internal fun NowPlayingSheet(
     onOpenSettingsShortcut: () -> Unit,
 ) {
     var position by remember(controller) { mutableLongStateOf(controller?.currentPosition ?: 0L) }
+    // Durante el arrastre, el reloj que se dibuja es el del dedo (no el del player):
+    // así la barra no "vuelve atrás" mientras ExoPlayer busca.
+    var scrubbing by remember { mutableStateOf(false) }
     var duration by remember(controller) { mutableLongStateOf((controller?.duration ?: 0L).coerceAtLeast(0L)) }
     var dragX by remember { mutableFloatStateOf(0f) }
     var horizontalJob by remember { mutableStateOf<Job?>(null) }
@@ -411,30 +415,56 @@ internal fun NowPlayingSheet(
     val currentLyrics = analysis?.takeIf { track != null && it.uri == track.uri }?.lyrics
     val context = LocalContext.current
     var realWaveform by remember(track?.uri) { mutableStateOf<List<Float>?>(null) }
+    // `true` desde el primer frame de una pista local: la onda arranca plana y sube
+    // cuando termina la extracción, en vez de mostrar una onda inventada y cambiarla.
+    var waveformLoading by remember(track?.uri) { mutableStateOf(track?.isLocal == true) }
     val flatWaveform = remember { List(180) { 0f } }
     LaunchedEffect(track?.uri) {
         realWaveform = null
         val selected = track
         if (selected != null && selected.isLocal) {
-            realWaveform = com.kukosin.app.data.analysis.WaveformExtractor.getWaveform(context, selected, 180)
+            waveformLoading = true
+            try {
+                realWaveform = com.kukosin.app.data.analysis.WaveformExtractor.getWaveform(context, selected, 180)
+            } finally {
+                waveformLoading = false
+            }
+        } else {
+            waveformLoading = false
         }
     }
+    // Muestreo del reloj: 200 ms ≈ 5 Hz. El slider rellena el hueco con un tween
+    // lineal, así que la onda se sigue moviendo a 60 fps; muestrear 30 veces por
+    // segundo sólo generaba recomposiciones de toda la hoja que competían con las
+    // animaciones de apertura y de carátula.
+    //
+    // Mientras el dedo arrastra (`scrubbing`) NO se lee la posición del player: manda la
+    // posición del dedo (`onScrub`). Así el reloj sigue al dedo al instante aunque el
+    // seek real tarde, y no hay saltos cuando ExoPlayer confirma la nueva posición.
     LaunchedEffect(controller) {
         while (isActive) {
-            position = controller?.currentPosition ?: 0L
             duration = (controller?.duration ?: 0L).coerceAtLeast(0L)
-            delay(32L)
+            if (!scrubbing) position = controller?.currentPosition ?: 0L
+            delay(200L)
         }
     }
 
+    // El blur del arrastre respeta el ajuste de Ajustes → Apariencia → Blur: con "Off" no
+    // se ejecuta ninguna pasada de RenderEffect y el gesto cuesta lo mismo que un scroll.
+    val uiBlur = LocalUiSettings.current.blur
+    val dragBlurMax = uiBlur.artworkDrag * 2f
     val artworkBlur by animateDpAsState(
-        targetValue = if (dragX != 0f) abs(dragX).coerceAtMost(12f).dp else 0.dp,
-        animationSpec = tween(120),
+        targetValue = if (dragX != 0f && dragBlurMax > 0.dp) {
+            (abs(dragX).coerceAtMost(12f) * (dragBlurMax.value / 12f)).dp
+        } else {
+            0.dp
+        },
+        animationSpec = Motion.quick(),
         label = "artworkDragBlur",
     )
     val artworkAlpha by animateFloatAsState(
         targetValue = if (dragX != 0f) 1f - (abs(dragX) / 90f).coerceIn(0f, 1f) else 1f,
-        animationSpec = tween(120),
+        animationSpec = Motion.quick(),
         label = "artworkDragAlpha",
     )
 
@@ -462,7 +492,7 @@ internal fun NowPlayingSheet(
         horizontalJob?.cancel()
         horizontalJob = gestureScope.launch {
             suspend fun snapBack() {
-                animate(dragX, 0f, animationSpec = spring(0.9f, Spring.StiffnessMediumLow)) { value, _ ->
+                animate(dragX, 0f, animationSpec = Motion.snappy()) { value, _ ->
                     dragX = value
                 }
             }
@@ -829,10 +859,23 @@ internal fun NowPlayingSheet(
                         Spacer(Modifier.height(10.dp))
                         KukosinWaveformSlider(
                             progress = if (duration > 0) position.toFloat() / duration else 0f,
-                            onSeek = { fraction -> if (interactiveEnabled) controller?.seekTo((fraction * duration).toLong()) },
+                            onSeek = { fraction ->
+                                if (interactiveEnabled) {
+                                    val target = (fraction * duration).toLong()
+                                    // Un solo seekTo por gesto (el slider ya avisa al soltar).
+                                    scrubbing = false
+                                    position = target
+                                    controller?.seekTo(target)
+                                }
+                            },
+                            onScrub = { fraction ->
+                                scrubbing = true
+                                position = (fraction * duration).toLong()
+                            },
                             waveHeight = waveformHeight,
                             waveform = if (track == null) flatWaveform else realWaveform,
                             trackKey = track?.uri?.toString(),
+                            isLoading = waveformLoading,
                             isPlaying = isPlaying,
                             enabled = controller != null && track != null && interactiveEnabled,
                             onPlayPause = {
@@ -981,6 +1024,22 @@ internal fun NowPlayingSheet(
     }
 }
 
+/**
+ * Carátula con **fundido cruzado** entre pistas.
+ *
+ * Antes, al cambiar de canción el `AsyncImage` cambiaba de modelo y la carátula se
+ * reemplazaba de golpe (con un hueco en el medio mientras Coil resolvía la nueva). Ahora se
+ * mantiene la imagen anterior visible hasta que la nueva está lista y se cruzan con un
+ * `Crossfade` de [Motion.ARTWORK_MS]: el cambio de pista se siente continuo aunque la
+ * imagen tarde en llegar.
+ *
+ * Detalles que sí se notan en una lista:
+ *  - La imagen anterior se guarda en un `remember`, así no hace falta que Coil la vuelva a
+ *    decodificar para el fundido.
+ *  - `contentDescription` sigue al álbum actual (el viejo queda como decoración durante el
+ *    cruce, no se anuncia).
+ *  - Sin carátula (ni vieja ni nueva) queda el fondo con la nota musical, como antes.
+ */
 @Composable
 internal fun Artwork(
     track: Track?,
@@ -988,21 +1047,56 @@ internal fun Artwork(
     artworkUri: Uri? = null,
     cornerRadius: Dp = 12.dp,
 ) {
+    // Se recuerda la última carátula válida: durante el cambio de pista se sigue viendo
+    // ésta mientras Coil resuelve la próxima. La escritura va en un `SideEffect` y no en el
+    // cuerpo de la composición: escribir estado mientras se compone obliga a Compose a
+    // recomponer en el acto (y con la carátula cayendo en cada cambio de pista eso se nota).
+    var lastImage by remember { mutableStateOf<Uri?>(null) }
+    val image = artworkUri ?: track?.artworkUri
+    SideEffect {
+        if (image != null && image != lastImage) lastImage = image
+    }
+    val target = image ?: lastImage
+
+    // Cuando una carátula reemplaza a otra (elegir una canción), no entra de golpe:
+    // además del fundido cruzado se asienta desde 96 % hasta su tamaño final. Eso es
+    // lo que hace que "se vaya posicionando" en su slot. Sólo se anima el reemplazo,
+    // no la primera aparición, para no castigar el scroll de las listas.
+    val settle = remember { Animatable(1f) }
+    var lastSettled by remember { mutableStateOf<Uri?>(null) }
+    LaunchedEffect(target) {
+        val previous = lastSettled
+        lastSettled = target
+        if (target != null && previous != null && previous != target) {
+            settle.snapTo(0.96f)
+            settle.animateTo(1f, Motion.enter(Motion.ARTWORK_MS))
+        }
+    }
+
     Box(
         modifier = modifier
             .then(if (cornerRadius > 0.dp) Modifier.clip(RoundedCornerShape(cornerRadius)) else Modifier)
-            .background(InkSoft),
+            .background(InkSoft)
+            .graphicsLayer {
+                scaleX = settle.value
+                scaleY = settle.value
+            },
         contentAlignment = Alignment.Center,
     ) {
         Icon(Icons.Rounded.MusicNote, contentDescription = null, tint = CreamMuted)
-        val image = artworkUri ?: track?.artworkUri
-        if (image != null) {
-            AsyncImage(
-                model = image,
-                contentDescription = track?.album,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
+        if (target != null) {
+            Crossfade(
+                targetState = target,
+                animationSpec = Motion.enter(Motion.ARTWORK_MS),
+                label = "artworkCrossfade",
+            ) { uri ->
+                AsyncImage(
+                    model = uri,
+                    contentDescription = if (uri == image) track?.album else null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 }
@@ -1019,17 +1113,21 @@ internal fun SharedTransitionArtwork(
     fullArtSlotRectProvider: () -> Rect,
 ) {
     val p = sheetProgress.coerceIn(0f, 1f)
-    val edgeRamp = minOf(p / 0.08f, (1f - p) / 0.06f).coerceIn(0f, 1f)
-    val midArc = sin(p * PI).toFloat().coerceIn(0f, 1f)
+    // 1.0 = "Soft"; el ajuste escala este blur (0 = Off, 1.7 = Strong).
+    val blurScale = LocalUiSettings.current.blur.artworkTransition.value / 18f
+    // El radio NO se recalcula con el progreso (que cambia en cada frame): recrear un
+    // RenderEffect distinto por frame es una de las operaciones más caras de esta
+    // transición. Se elige un valor por estado y `animateDpAsState` hace el cruce una
+    // sola vez, cuando cambia el estado.
     val targetBlurVal = when {
         p <= 0.002f || p >= 0.998f -> 0f
-        isSheetDragging -> 16f * edgeRamp
-        wasSheetDragged -> 12f * midArc
-        else -> 4.5f * midArc
+        isSheetDragging -> 14f * blurScale
+        wasSheetDragged -> 9f * blurScale
+        else -> 5f * blurScale
     }
     val transitBlur by animateDpAsState(
         targetValue = targetBlurVal.dp,
-        animationSpec = tween(durationMillis = 90),
+        animationSpec = Motion.quick(140),
         label = "sharedArtworkTransitBlur",
     )
 

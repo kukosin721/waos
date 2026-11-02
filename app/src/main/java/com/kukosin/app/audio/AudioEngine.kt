@@ -86,10 +86,23 @@ data class AudioEngineConfig(
     val strictBitPerfect: Boolean = true,
     /** Si es true, no se acepta un stream compartido (modos exclusivos). */
     val requireExclusive: Boolean = false,
+    /**
+     * Si es true y [deviceId] no se puede abrir, el motor falla en vez de caer al
+     * dispositivo por defecto. Obligatorio en los modos que apuntan a un DAC USB.
+     */
+    val requireDevice: Boolean = false,
     /** Objetivo de buffer en milisegundos (estabilidad). */
     val bufferMs: Int = 250,
     /** Fundido de entrada (25 ms) y de salida (60 ms) para no chasquear al play/pausa. */
     val fades: Boolean = true,
+    /**
+     * Preroll del arranque en milisegundos (`-1` = automático). Los presets "sin cortes"
+     * bajan a una ráfaga para que el stream arranque en cuanto hay datos, en vez de esperar
+     * dos ráfagas o 20 ms.
+     */
+    val prerollMs: Int = -1,
+    /** 0 = volumen lineal, 1 = perceptual (el deslizador se siente parejo). */
+    val volumeCurve: Int = 0,
 )
 
 /** Lo que devolvió el hardware, tal cual. */
@@ -110,6 +123,10 @@ data class EngineInfo(
     val passthrough: Boolean = false,
     val volumePercent: Int = 100,
     val errorCode: Int = 0,
+    /** Latencia real medida con el timestamp de AAudio (-1 = desconocida). */
+    val latencyMicros: Int = -1,
+    /** El stream usa el camino MMAP: sin mezclador, latencia mínima. */
+    val mmap: Boolean = false,
 ) {
     val apiLabel: String
         get() = when (apiCode) {
@@ -128,12 +145,16 @@ data class EngineInfo(
 
     val converted: Boolean get() = opened && !passthrough
 
-    /** Texto corto para la UI: "24-bit · 96 kHz · exclusive". */
+    /** Latencia de la cadena nativa en milisegundos (-1 = desconocida). */
+    val latencyMs: Double get() = if (latencyMicros >= 0) latencyMicros / 1000.0 else -1.0
+
+    /** Texto corto para la UI: "24-bit · 96 kHz · exclusive · MMAP". */
     val streamLabel: String
         get() {
             val fmt = stream ?: return "—"
             val sharing = if (exclusive) "exclusive" else "shared"
-            return "${fmt.bits}-bit · ${(streamSampleRate / 1000.0).format(1)} kHz · $sharing"
+            val path = if (mmap) " · MMAP" else ""
+            return "${fmt.bits}-bit · ${(streamSampleRate / 1000.0).format(1)} kHz · $sharing$path"
         }
 }
 
@@ -174,13 +195,31 @@ class AudioEngine : AutoCloseable {
 
     val isOpen: Boolean get() = info().opened
 
-    /** Frames de origen que ya salieron por el DAC (para la posición del player). */
-    val sourceFramesRendered: Long get() = withHandle(0L) { nativeGetSourceFrames(it) }
+    /**
+     * Posición de playout en microsegundos: el timestamp de AAudio menos la latencia
+     * real del camino. Es lo que Media3 espera de `AudioOutput.getPositionUs()`.
+     */
+    fun positionMicros(): Long = withHandle(0L) { nativeGetPositionMicros(it) }
+
+    /** Latencia real del camino de audio en microsegundos (-1 = desconocida). */
+    fun latencyMicros(): Long = withHandle(-1L) { nativeGetLatencyMicros(it) }
+
+    /** true si el motor ya vació todo lo encolado (fin de stream real). */
+    fun isEndOfStream(): Boolean = withHandle(false) { nativeIsEndOfStream(it) }
+
+    /** Frames de origen encolados desde el último flush (diagnóstico). */
+    val sourceFramesQueued: Long get() = withHandle(0L) { nativeGetSourceFrames(it) }
 
     /**
-     * Abre el stream. Bloqueante (~5-40 ms): llamar fuera del hilo principal.
-     * Intenta primero exacto + exclusivo; si no se puede y [AudioEngineConfig.strictBitPerfect]
-     * es false, busca un fallback con conversión propia.
+     * Configura y lanza la apertura del stream en un hilo nativo propio.
+     *
+     * **No bloquea**: la apertura real de AAudio (que puede tardar decenas de ms cuando
+     * el HAL negocia exclusividad) ocurre fuera del hilo que llama. El primer
+     * `write`/`start` espera a que termine y, si falló, devuelve el error para que
+     * Media3 reconstruya el sink.
+     *
+     * Intenta primero el formato exacto y exclusivo; si no se puede y
+     * [AudioEngineConfig.strictBitPerfect] es false, busca un fallback con conversión.
      */
     fun configure(config: AudioEngineConfig): NativeResult = withHandle(NativeResult.ERROR_NULL) { h ->
         NativeResult.fromCode(
@@ -192,8 +231,11 @@ class AudioEngine : AutoCloseable {
                 config.deviceId,
                 config.strictBitPerfect,
                 config.requireExclusive,
+                config.requireDevice,
                 config.bufferMs,
                 config.fades,
+                config.prerollMs,
+                config.volumeCurve,
             ),
         )
     }
@@ -204,13 +246,43 @@ class AudioEngine : AutoCloseable {
      */
     fun errorCode(): Int = withHandle(0) { h -> nativeErrorCode(h) }
 
+    /**
+     * Espera (con timeout) a que termine la apertura diferida y devuelve su resultado.
+     * Lo usa el proveedor para informar en la UI, sin abrir el stream dos veces.
+     */
+    fun awaitOpen(timeoutMs: Int): NativeResult = withHandle(NativeResult.ERROR_NULL) { h ->
+        NativeResult.fromCode(nativeAwaitOpen(h, timeoutMs))
+    }
+
     fun start(): NativeResult = withHandle(NativeResult.ERROR_NULL) { NativeResult.fromCode(nativeStart(it)) }
 
     fun stop(): NativeResult = withHandle(NativeResult.ERROR_NULL) { NativeResult.fromCode(nativeStop(it)) }
 
+    /**
+     * Fin de stream con drenado: espera (con timeout) a que el DAC consuma lo que
+     * queda antes de devolver. Media3 llama a `stop()` una sola vez por stream, así
+     * que el bloqueo está acotado y ocurre en su hilo de audio.
+     */
+    fun stopAndWait(timeoutMs: Int = 750): NativeResult =
+        withHandle(NativeResult.ERROR_NULL) { NativeResult.fromCode(nativeStopAndWait(it, timeoutMs)) }
+
     fun pause(): NativeResult = withHandle(NativeResult.ERROR_NULL) { NativeResult.fromCode(nativePause(it)) }
 
     fun flush(): NativeResult = withHandle(NativeResult.ERROR_NULL) { NativeResult.fromCode(nativeFlush(it)) }
+
+    /**
+     * Flush para el hueco entre pistas: mismo efecto sobre los datos, pero sin esperar las
+     * transiciones de estado del HAL (en `flush()` pueden ser hasta ~240 ms de espera que,
+     * entre canción y canción, se escuchan como un bache).
+     */
+    fun flushForTransition(): NativeResult =
+        withHandle(NativeResult.ERROR_NULL) { NativeResult.fromCode(nativeFlushForTransition(it)) }
+
+    /** Curva de volumen: 0 = lineal, 1 = perceptual. */
+    fun setVolumeCurve(curve: Int) = withHandle(Unit) { nativeSetVolumeCurve(it, curve) }
+
+    /** Activa/desactiva los fundidos en caliente (modo purista sin rampas). */
+    fun setFadesEnabled(enabled: Boolean) = withHandle(Unit) { nativeSetFades(it, enabled) }
 
     /** Volumen 0..1. A 1.0 el camino es bit-perfect; por debajo se atenúa. */
     fun setVolume(volume: Float) = withHandle(Unit) {
@@ -259,6 +331,8 @@ class AudioEngine : AutoCloseable {
             source = PcmFormat.fromCode(infoBuffer[13]),
             sourceSampleRate = infoBuffer[14],
             sourceChannels = infoBuffer[15],
+            latencyMicros = infoBuffer[16],
+            mmap = infoBuffer[17] == 1,
         )
     }
 
@@ -274,6 +348,8 @@ class AudioEngine : AutoCloseable {
 
     private external fun nativeCreate(): Long
     private external fun nativeDelete(handle: Long)
+    private external fun nativeFlushForTransition(handle: Long): Int
+    private external fun nativeSetVolumeCurve(handle: Long, curve: Int)
     private external fun nativeConfigure(
         handle: Long,
         format: Int,
@@ -282,22 +358,32 @@ class AudioEngine : AutoCloseable {
         deviceId: Int,
         strictBitPerfect: Boolean,
         requireExclusive: Boolean,
+        requireDevice: Boolean,
         bufferMs: Int,
         fades: Boolean,
+        prerollMs: Int,
+        volumeCurve: Int,
     ): Int
     private external fun nativeStart(handle: Long): Int
     private external fun nativeStop(handle: Long): Int
+    /** El nativo devuelve `oboe::Result` (int), así que se declara Int y se mapea. */
+    private external fun nativeStopAndWait(handle: Long, timeoutMs: Int): Int
     private external fun nativePause(handle: Long): Int
     private external fun nativeFlush(handle: Long): Int
     private external fun nativeSetVolume(handle: Long, volume: Float)
+    private external fun nativeSetFades(handle: Long, enabled: Boolean)
     private external fun nativeWritePacked(handle: Long, buffer: ByteBuffer, offset: Int, length: Int): Int
     private external fun nativeErrorCode(handle: Long): Int
     private external fun nativeGetState(handle: Long): Int
+    private external fun nativeAwaitOpen(handle: Long, timeoutMs: Int): Int
     private external fun nativeGetSourceFrames(handle: Long): Long
+    private external fun nativeGetPositionMicros(handle: Long): Long
+    private external fun nativeGetLatencyMicros(handle: Long): Long
+    private external fun nativeIsEndOfStream(handle: Long): Boolean
     private external fun nativeGetInfo(handle: Long, out: IntArray)
 
     private companion object {
-        const val INFO_SIZE = 16
+        const val INFO_SIZE = 18
 
         init {
             System.loadLibrary("audioengine")

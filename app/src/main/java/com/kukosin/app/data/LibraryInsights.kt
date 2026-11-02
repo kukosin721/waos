@@ -41,6 +41,23 @@ object LibraryInsights {
         preferences.edit().putStringSet("uris", snapshot).apply()
     }
 
+    /**
+     * URIs de las pistas más probables de abrir primero: favoritos y las más escuchadas.
+     *
+     * Se usa para precargar sus carátulas en la caché de memoria de Coil antes de que la UI
+     * las pida. Se guardan así, en el orden en que conviene pedirlas (favoritos primero).
+     */
+    fun recentAndFavorites(limit: Int = 24): List<String> {
+        val favorites = _favorites.value
+        val counts = _playCounts.value
+        val ordered = ArrayList<String>(limit)
+        favorites.forEach { if (ordered.size < limit) ordered.add(it) }
+        counts.entries
+            .sortedByDescending { it.value }
+            .forEach { if (ordered.size < limit && it.key !in favorites) ordered.add(it.key) }
+        return ordered
+    }
+
     /** Cuenta un inicio real, no la preparación en pausa ni cada vez que se reanuda. */
     @Synchronized
     fun recordPlay(uri: String) {

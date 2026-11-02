@@ -2,6 +2,7 @@
 
 package com.kukosin.app.ui
 
+import com.kukosin.app.playback.ContinuityPreset
 import androidx.media3.common.util.UnstableApi
 import android.Manifest
 import android.content.ComponentName
@@ -65,14 +66,12 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.rememberTransition
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
@@ -215,6 +214,10 @@ internal fun FullScreenSettingsScreen(
     onToggleFades: () -> Unit,
     bufferMs: Int,
     onSelectBufferMs: (Int) -> Unit,
+    continuity: ContinuityPreset,
+    onSelectContinuity: (ContinuityPreset) -> Unit,
+    volumeCurve: Int,
+    onSelectVolumeCurve: (Int) -> Unit,
     decoder: String,
     onSelectDecoder: (String) -> Unit,
     usbPermissionGranted: Boolean,
@@ -226,6 +229,8 @@ internal fun FullScreenSettingsScreen(
     onResetAccent: () -> Unit,
     animationSpeed: AnimationSpeed,
     onSelectAnimationSpeed: (AnimationSpeed) -> Unit,
+    blurStrength: BlurStrength,
+    onSelectBlurStrength: (BlurStrength) -> Unit,
     fontOption: FontWeightOption,
     onSelectFontOption: (FontWeightOption) -> Unit,
     onRescan: () -> Unit,
@@ -245,7 +250,7 @@ internal fun FullScreenSettingsScreen(
     val transition = rememberTransition(visibilityState, label = "settingsScreen")
     val reveal by transition.animateFloat(
         transitionSpec = {
-            tween(durationMillis = if (targetState) 300 else 220, easing = FastOutSlowInEasing)
+            if (targetState) Motion.enter(Motion.ENTER_MS) else Motion.leave()
         },
         label = "settingsReveal",
     ) { visible -> if (visible) 1f else 0f }
@@ -277,7 +282,7 @@ internal fun FullScreenSettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onDismiss) {
+                    IconButton(onClick = { hapticTick(); onDismiss() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Gold, modifier = Modifier.size(28.dp))
                     }
                     Spacer(Modifier.width(8.dp))
@@ -304,9 +309,10 @@ internal fun FullScreenSettingsScreen(
                                 Text("Signal path to the DAC", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "Four paths with their own semantics. Only the exclusive ones use the Oboe " +
-                                        "engine, and bit-perfect only exists with a DAC: the built-in speaker always " +
-                                        "goes through the phone's DSP and amplifier.",
+                                    "Five paths with their own semantics. Every mode except Disabled plays " +
+                                        "through the Oboe engine; the exclusive ones add a hard requirement and " +
+                                        "bit-perfect only exists with a DAC: the built-in speaker always goes " +
+                                        "through the phone's DSP and amplifier.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = CreamMuted,
                                 )
@@ -390,7 +396,7 @@ internal fun FullScreenSettingsScreen(
                                 if (!output.isDac) {
                                     Text(
                                         "No DAC detected: exclusive output modes stay locked until a DAC is connected. " +
-                                            "The app keeps playing through the Android mixer.",
+                                            "Playback keeps going through the Oboe engine in Automatic mode.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = Color(0xFFFFB26B),
                                     )
@@ -459,6 +465,17 @@ internal fun FullScreenSettingsScreen(
                                         "${engineInfo.bufferFrames} frames · " +
                                             "${Math.round(engineInfo.bufferMs)} ms · burst ${engineInfo.framesPerBurst}",
                                     )
+                                    SettingsStatusLine(
+                                        "Path",
+                                        if (engineInfo.mmap) "MMAP (no mixer, no DSP)" else
+                                            if (engineInfo.exclusive) "Exclusive (HAL)" else "Shared (mixer)",
+                                    )
+                                    if (engineInfo.latencyMs >= 0) {
+                                        SettingsStatusLine(
+                                            "Latency",
+                                            "${Math.round(engineInfo.latencyMs)} ms (measured with AAudio timestamp)",
+                                        )
+                                    }
                                     SettingsStatusLine(
                                         "Xruns",
                                         if (engineInfo.xRuns < 0) "Not reported" else engineInfo.xRuns.toString(),
@@ -582,6 +599,91 @@ internal fun FullScreenSettingsScreen(
                                         uncheckedTrackColor = InkSoft,
                                     ),
                                 )
+                            }
+                        }
+                    }
+
+                    item {
+                        Text("No gaps between tracks", style = MaterialTheme.typography.labelLarge, color = Gold, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                        Surface(
+                            color = InkSoft,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text("Skip and seek response", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    continuity.description +
+                                        " Applies buffer, start-up preroll and fades in one go, so a skip " +
+                                        "reaches the DAC as early as the device allows.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = CreamMuted,
+                                )
+                                Spacer(Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    ContinuityPreset.entries.forEach { option ->
+                                        val selected = continuity == option
+                                        Surface(
+                                            color = if (selected) Gold else Ink,
+                                            shape = RoundedCornerShape(10.dp),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, Gold),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable { onSelectContinuity(option) },
+                                        ) {
+                                            Text(
+                                                text = option.label,
+                                                color = if (selected) Ink else Gold,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                                textAlign = TextAlign.Center,
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.height(18.dp))
+                                Text("Volume curve", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Perceptual spreads the slider evenly over its whole range instead of " +
+                                        "jumping in the last third. At 100 % the gain is exactly unity either way, " +
+                                        "so bit-perfect output does not change.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = CreamMuted,
+                                )
+                                Spacer(Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    listOf(1 to "Perceptual", 0 to "Linear").forEach { (value, label) ->
+                                        val selected = volumeCurve == value
+                                        Surface(
+                                            color = if (selected) Gold else Ink,
+                                            shape = RoundedCornerShape(10.dp),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, Gold),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable { onSelectVolumeCurve(value) },
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                color = if (selected) Ink else Gold,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(vertical = 8.dp),
+                                                textAlign = TextAlign.Center,
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -885,6 +987,45 @@ internal fun FullScreenSettingsScreen(
                                             modifier = Modifier
                                                 .weight(1f)
                                                 .clickable { onSelectAnimationSpeed(option) },
+                                        ) {
+                                            Text(
+                                                text = option.label,
+                                                color = if (selected) Ink else Gold,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                                textAlign = TextAlign.Center,
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.height(18.dp))
+                                Text("Transition blur", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Cream)
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    blurStrength.description +
+                                        " Blur is the most expensive effect in the app: Off is also the fastest. " +
+                                        "Navigation blur is the moving one: it only exists during a screen " +
+                                        "transition and never costs a pass while the screen is still.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = CreamMuted,
+                                    modifier = Modifier.animateContentSize(Motion.quick()),
+                                )
+                                Spacer(Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    BlurStrength.entries.forEach { option ->
+                                        val selected = blurStrength == option
+                                        Surface(
+                                            color = if (selected) Gold else Ink,
+                                            shape = RoundedCornerShape(10.dp),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, Gold),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable { onSelectBlurStrength(option) },
                                         ) {
                                             Text(
                                                 text = option.label,

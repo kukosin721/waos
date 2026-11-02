@@ -7,12 +7,26 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Oboe is consumed as a prebuilt prefab module (com.google.oboe:oboe AAR).
 find_package(oboe REQUIRED CONFIG)
 
+# Oboe trae OboeExtensions.h (consulta de MMAP) en el mismo paquete prefab.
+
 add_library(audioengine SHARED
     native-lib.cpp
     audio/AudioEngine.cpp
+    # Decodificador FLAC propio: es lo que permite que un FLAC de 24 bits llegue entero al
+    # DAC (MediaCodec sólo entrega float o 16 bits). Sin dependencias externas.
+    audio/FlacDecoder.cpp
+    flac-jni.cpp
 )
 
 target_include_directories(audioengine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_compile_options(audioengine PRIVATE
+    -Wall
+    -Wextra
+    -Wno-unused-parameter
+    -fno-exceptions
+    -fno-rtti
+)
 
 target_link_libraries(audioengine
     oboe::oboe

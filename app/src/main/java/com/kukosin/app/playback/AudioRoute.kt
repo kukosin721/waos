@@ -149,13 +149,17 @@ object AudioRoute {
     /**
      * Dispositivo al que apunta un modo de salida.
      *
-     * DAC USB → sólo USB. Controlador directo → USB si está, si no el codec con cable.
-     * AAudio exclusivo → jack / línea. Desactivado → el que decida el sistema.
+     * Automático → la mejor salida disponible (USB, si no línea/jack; si no, la que
+     * decida el sistema). DAC USB → sólo USB. Controlador directo → USB si está, si no
+     * el codec con cable. AAudio exclusivo → jack / línea. Desactivado → el que decida
+     * el sistema.
      */
     fun deviceFor(mode: OutputMode): AudioDeviceInfo? {
         val audioManager = audioManager ?: return null
         val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { it.isSink }
         return when (mode) {
+            OutputMode.AUTO -> devices.firstOrNull { it.type in USB_TYPES }
+                ?: devices.firstOrNull { it.type in WIRED_TYPES }
             OutputMode.USB_DAC -> devices.firstOrNull { it.type in USB_TYPES }
             OutputMode.DIRECT_DRIVER -> devices.firstOrNull { it.type in USB_TYPES }
                 ?: devices.firstOrNull { it.type in WIRED_TYPES }

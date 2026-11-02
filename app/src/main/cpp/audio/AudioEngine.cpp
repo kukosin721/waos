@@ -1,9 +1,11 @@
 #include "audio/AudioEngine.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <cstdarg>
+#include <thread>
 
 #include <android/log.h>
 
@@ -37,12 +39,63 @@ void logE(const char* fmt, ...) {
     va_end(args);
 }
 
+/**
+ * Tabla de fases del resampler.
+ *
+ * `kPhases`: cuántos valores de fase fraccionaria se tabulan. El error de fase residual
+ * es ≤ 1/(2·kPhases) de muestra, así que 512 (lo que ya había) es holgado.
+ *
+ * `kBaseHalf` / `kKaiserBeta`: largo y ventana del filtro. Se subieron de 12 / β 8.0 a
+ * 32 / β 10.06 siguiendo el criterio de BitChord (`DacFormatConverter`: ventana Kaiser
+ * β ≈ 10 = ~100 dB de banda de rechazo). Medido en el arnés (`9a`/`9c`):
+ *
+ *   - 44.1 → 48 kHz: 20 kHz pasa de −0.94 dB a −0.08 dB (banda de paso plana).
+ *   - 48 → 44.1 kHz: un tono de 23 kHz (que debe desaparecer) pasa de −11 dB
+ *     —alias audible— a mejor que −40 dB.
+ *
+ * El costo es el doble de multiplicaciones por muestra, en el hilo productor y no en el
+ * callback de audio: despreciable frente a decodificar el archivo.
+ */
 constexpr int32_t kPhases = 512;
-constexpr double kKaiserBeta = 8.0;
-constexpr int32_t kBaseHalf = 12;
+constexpr double kKaiserBeta = 10.06;
+constexpr int32_t kBaseHalf = 32;
+constexpr int64_t kNanosPerSecond = 1000000000LL;
+
+/**
+ * Intentos de rate alternativo antes de rendirse (BitChord usa 3). Cada intento abre un
+ * stream real: un DAC que no concede exclusivo los rechaza todos y encadenar más sólo
+ * retrasa el arranque.
+ */
+constexpr int32_t MAX_RATE_ATTEMPTS = 3;
 
 inline float clamp1(double x) {
     return static_cast<float>(x < -1.0 ? -1.0 : (x > 1.0 ? 1.0 : x));
+}
+
+inline int64_t nowNanos() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+}
+
+oboe::AudioFormat toOboeFormat(PcmFormat format) {
+    switch (format) {
+        case PcmFormat::kI16: return oboe::AudioFormat::I16;
+        case PcmFormat::kI24: return oboe::AudioFormat::I24;
+        case PcmFormat::kI32: return oboe::AudioFormat::I32;
+        case PcmFormat::kF32: return oboe::AudioFormat::Float;
+    }
+    return oboe::AudioFormat::I16;
+}
+
+PcmFormat fromOboeFormat(oboe::AudioFormat format) {
+    switch (format) {
+        case oboe::AudioFormat::I16: return PcmFormat::kI16;
+        case oboe::AudioFormat::I24: return PcmFormat::kI24;
+        case oboe::AudioFormat::I32: return PcmFormat::kI32;
+        case oboe::AudioFormat::Float: return PcmFormat::kF32;
+        default: return PcmFormat::kI16;
+    }
 }
 
 // Decodifica PCM entrelazado a float normalizado (-1..1).
@@ -55,7 +108,7 @@ void decodeToFloat(const uint8_t* src, int32_t sampleCount, PcmFormat format, fl
         }
         case PcmFormat::kI24: {
             for (int32_t i = 0; i < sampleCount; ++i) {
-                const uint8_t* p = src + i * 3;
+                const uint8_t* p = src + static_cast<size_t>(i) * 3;
                 int32_t v = static_cast<int32_t>(p[0]) |
                             (static_cast<int32_t>(p[1]) << 8) |
                             (static_cast<int32_t>(static_cast<int8_t>(p[2])) << 16);
@@ -66,7 +119,7 @@ void decodeToFloat(const uint8_t* src, int32_t sampleCount, PcmFormat format, fl
         case PcmFormat::kI32: {
             const auto* s = reinterpret_cast<const int32_t*>(src);
             for (int32_t i = 0; i < sampleCount; ++i) {
-                dst[i] = static_cast<float>(s[i] / 2147483648.0);
+                dst[i] = static_cast<float>(static_cast<double>(s[i]) / 2147483648.0);
             }
             break;
         }
@@ -95,7 +148,7 @@ void encodeFromFloat(const float* src, int32_t sampleCount, PcmFormat format, ui
                 if (v > 8388607.0) v = 8388607.0;
                 if (v < -8388608.0) v = -8388608.0;
                 const int32_t iv = static_cast<int32_t>(v);
-                uint8_t* p = dst + i * 3;
+                uint8_t* p = dst + static_cast<size_t>(i) * 3;
                 p[0] = static_cast<uint8_t>(iv & 0xFF);
                 p[1] = static_cast<uint8_t>((iv >> 8) & 0xFF);
                 p[2] = static_cast<uint8_t>((iv >> 16) & 0xFF);
@@ -237,7 +290,14 @@ void PolyphaseResampler::configure(int32_t inRate, int32_t outRate, int32_t chan
 
 void PolyphaseResampler::rebuildKernel() {
     kernel_.assign(static_cast<size_t>(kPhases) * static_cast<size_t>(taps_), 0.0f);
-    const double fc = step_ > 1.0 ? 0.5 / step_ : 0.5;
+    // El corte depende de la dirección, y equivocarlo es audible:
+    //  - Bajando de tasa (step > 1) hay que cortar por debajo del Nyquist de SALIDA y
+    //    dejar banda de transición (0.96), o los tonos agudos por encima de ese Nyquist
+    //    se pliegan dentro del audio audible como alias.
+    //  - Subiendo de tasa (step < 1) el Nyquist que manda es el de ENTRADA: el filtro
+    //    debe ser plano hasta él. Aplicar el 0.96 también al subir atenuaba los agudos
+    //    (medido: −0.9 dB a 20 kHz, y peor con ventanas más largas).
+    const double fc = step_ > 1.0 ? 0.5 * 0.96 / step_ : 0.5;
     const double norm = besselI0(kKaiserBeta);
     for (int32_t ph = 0; ph < kPhases; ++ph) {
         const double frac = static_cast<double>(ph) / static_cast<double>(kPhases);
@@ -256,8 +316,8 @@ void PolyphaseResampler::rebuildKernel() {
         }
         if (std::fabs(sum) > 1e-12) {
             for (int32_t t = 0; t < taps_; ++t) {
-                kernel_[static_cast<size_t>(ph) * taps_ + t] =
-                        static_cast<float>(kernel_[static_cast<size_t>(ph) * taps_ + t] / sum);
+                const size_t idx = static_cast<size_t>(ph) * taps_ + t;
+                kernel_[idx] = static_cast<float>(kernel_[idx] / sum);
             }
         }
     }
@@ -311,8 +371,11 @@ int32_t PolyphaseResampler::process(const float* in, int32_t inFrames, float* ou
         pos_ += step_;
     }
 
-    // Compactar conservando la ventana que necesita la próxima llamada.
-    const int32_t keepFrom = std::max(0, static_cast<int32_t>(std::floor(pos_)) - half_ + 1);
+    // Compactar conservando la ventana que necesita la próxima llamada. Se conserva
+    // siempre `half_ - 1` frames de historia para que el próximo bloque pueda
+    // interpolar desde su primer frame (antes podía quedarse corto y perder muestras).
+    const int32_t processedUpTo = static_cast<int32_t>(std::floor(pos_));
+    const int32_t keepFrom = std::max(0, processedUpTo - half_ + 1);
     if (keepFrom > 0 && keepFrom <= workFrames) {
         const int32_t keepFrames = workFrames - keepFrom;
         std::memmove(work_.data(),
@@ -343,18 +406,15 @@ oboe::Result AudioEngine::openStream(PcmFormat format,
     builder.setDirection(oboe::Direction::Output);
     // Unspecified: Oboe elige AAudio en API 26+ y OpenSL ES en equipos antiguos.
     builder.setAudioApi(oboe::AudioApi::Unspecified);
-    builder.setFormat(static_cast<oboe::AudioFormat>(
-            format == PcmFormat::kI16 ? oboe::AudioFormat::I16
-            : format == PcmFormat::kI24 ? oboe::AudioFormat::I24
-            : format == PcmFormat::kI32 ? oboe::AudioFormat::I32
-                                        : oboe::AudioFormat::Float));
+    builder.setFormat(toOboeFormat(format));
     builder.setSampleRate(sampleRate > 0 ? sampleRate : 48000);
-    builder.setChannelCount(channels > 0 ? channels : oboe::ChannelCount::Stereo);
+    builder.setChannelCount(channels > 0 ? channels : 2);
     builder.setSharingMode(sharing);
     builder.setPerformanceMode(performance);
     builder.setUsage(oboe::Usage::Media);
     builder.setContentType(oboe::ContentType::Music);
     builder.setSpatializationBehavior(oboe::SpatializationBehavior::Never);
+    builder.setIsContentSpatialized(false);
     // Para bit-perfect: prohibido que Oboe convierta por su cuenta. Si el formato
     // no es nativo, preferimos fallar y probar otro candidato nosotros.
     builder.setFormatConversionAllowed(false);
@@ -365,90 +425,212 @@ oboe::Result AudioEngine::openStream(PcmFormat format,
     if (deviceId_ > 0) {
         builder.setDeviceId(deviceId_);
     }
-    const oboe::Result result = builder.openStream(stream_);
+    std::shared_ptr<oboe::AudioStream> stream;
+    const oboe::Result result = builder.openStream(stream);
     if (result != oboe::Result::OK) {
-        stream_.reset();
-    }
-    return result;
-}
-
-oboe::Result AudioEngine::open(const EngineConfig& config) {
-    close();
-
-    sourceFormat_ = config.sourceFormat;
-    sourceChannels_ = config.sourceChannels > 0 ? config.sourceChannels : 2;
-    sourceRate_ = config.sourceSampleRate > 0 ? config.sourceSampleRate : 48000;
-    deviceId_ = config.deviceId;
-    errorCode_.store(0, std::memory_order_relaxed);
-    underruns_.store(0, std::memory_order_relaxed);
-    streamFramesConsumed_.store(0, std::memory_order_relaxed);
-
-    logI("open: source=%s %d Hz %d ch strict=%d exclusiveOnly=%d buffer=%dms device=%d",
-         formatName(sourceFormat_), sourceRate_, sourceChannels_,
-         config.strictBitPerfect ? 1 : 0, config.requireExclusive ? 1 : 0,
-         config.bufferMs, deviceId_);
-
-    // 1) Camino bit-perfect: mismo formato, mismo rate, exclusivo, sin fast mixer.
-    oboe::Result result = openStream(sourceFormat_, sourceRate_, sourceChannels_,
-                                     oboe::SharingMode::Exclusive,
-                                     oboe::PerformanceMode::None);
-    if (result != oboe::Result::OK) {
-        logW("exclusivo %s @ %d falló: %s", formatName(sourceFormat_), sourceRate_,
-             oboe::convertToText(result));
-    }
-
-    // 2) Mismo formato/rate pero compartido (el HAL puede resamplear: se informa).
-    //    Los modos exclusivos no aceptan este paso: si el HAL no da exclusivo, se avisa.
-    if (result != oboe::Result::OK && !config.requireExclusive) {
-        result = openStream(sourceFormat_, sourceRate_, sourceChannels_,
-                            oboe::SharingMode::Shared,
-                            oboe::PerformanceMode::None);
-        if (result != oboe::Result::OK) {
-            logW("compartido %s @ %d falló: %s", formatName(sourceFormat_), sourceRate_,
-                 oboe::convertToText(result));
-        }
-    }
-
-    // 3) Fallback: conversión propia (Kaiser) a un formato que el equipo acepte.
-    if (result != oboe::Result::OK && !config.strictBitPerfect) {
-        const int32_t rates[] = {48000, 44100, 96000, 192000, 88200, 176400};
-        const PcmFormat formats[] = {PcmFormat::kF32, PcmFormat::kI16, PcmFormat::kI32};
-        for (int32_t i = 0; i < 6 && result != oboe::Result::OK; ++i) {
-            for (int32_t f = 0; f < 3 && result != oboe::Result::OK; ++f) {
-                if (rates[i] == sourceRate_ && formats[f] == sourceFormat_) continue;
-                result = openStream(formats[f], rates[i], sourceChannels_,
-                                    config.requireExclusive ? oboe::SharingMode::Exclusive
-                                                            : oboe::SharingMode::Shared,
-                                    oboe::PerformanceMode::LowLatency);
-                if (result == oboe::Result::OK) {
-                    logI("fallback aceptado: %s @ %d (fuente %s @ %d)",
-                         formatName(formats[f]), rates[i], formatName(sourceFormat_), sourceRate_);
-                }
-            }
-        }
-    }
-
-    if (result != oboe::Result::OK) {
-        logE("no se pudo abrir ningún stream: %s", oboe::convertToText(result));
-        errorCode_.store(static_cast<int32_t>(result), std::memory_order_relaxed);
         return result;
     }
 
-    finalizeOpen(config);
+    // `Exclusive` y el formato se **piden**, no se garantizan: Android puede devolver un
+    // stream compartido o con otro formato sin avisar, y la UI terminaría mostrando
+    // "exclusivo" cuando no lo es (Mornye hace esta misma comprobación y descarta el
+    // stream en vez de mentir). Si el modo exige exclusivo y no lo consiguió, se cierra
+    // y se sigue con el próximo candidato.
+    if (sharing == oboe::SharingMode::Exclusive &&
+        stream->getSharingMode() != oboe::SharingMode::Exclusive) {
+        logW("el HAL no concedió exclusivo (devolvió %d, donde 0=shared y 1=exclusive): "
+             "se descarta este stream",
+             static_cast<int>(stream->getSharingMode()));
+        stream->close();
+        return oboe::Result::ErrorUnavailable;
+    }
+    if (stream->getFormat() != toOboeFormat(format) ||
+        stream->getSampleRate() != (sampleRate > 0 ? sampleRate : 48000) ||
+        stream->getChannelCount() != (channels > 0 ? channels : 2)) {
+        logW("el HAL cambió el formato pedido (%s %d Hz %d ch -> %s %d Hz %d ch)",
+             formatName(format), sampleRate, channels,
+             formatName(fromOboeFormat(stream->getFormat())), stream->getSampleRate(),
+             stream->getChannelCount());
+    }
+    stream_ = stream;
     return oboe::Result::OK;
 }
 
+oboe::Result AudioEngine::tryOpenCandidates(const EngineConfig& config) {
+    const oboe::SharingMode strictSharing = oboe::SharingMode::Exclusive;
+    const oboe::SharingMode looseSharing = config.requireExclusive ? oboe::SharingMode::Exclusive
+                                                                 : oboe::SharingMode::Shared;
+    oboe::Result last = oboe::Result::ErrorUnavailable;
+
+    // 1) Exacto + exclusivo + low latency (camino MMAP si el equipo lo permite).
+    last = openStream(sourceFormat_, sourceRate_, sourceChannels_,
+                      strictSharing, oboe::PerformanceMode::LowLatency);
+    if (last == oboe::Result::OK) return last;
+    logW("exclusivo %s @ %d falló: %s", formatName(sourceFormat_), sourceRate_,
+         oboe::convertToText(last));
+
+    // 2) Exacto, pero con la política de sharing que permite el modo.
+    last = openStream(sourceFormat_, sourceRate_, sourceChannels_,
+                      looseSharing, oboe::PerformanceMode::LowLatency);
+    if (last == oboe::Result::OK) return last;
+    logW("compartido %s @ %d falló: %s", formatName(sourceFormat_), sourceRate_,
+         oboe::convertToText(last));
+
+    // 3) Exacto sin exigir low latency (algunos HAL antiguos rechazan MMAP).
+    last = openStream(sourceFormat_, sourceRate_, sourceChannels_,
+                      looseSharing, oboe::PerformanceMode::None);
+    if (last == oboe::Result::OK) return last;
+    logW("sin low-latency %s @ %d falló: %s", formatName(sourceFormat_), sourceRate_,
+         oboe::convertToText(last));
+
+    // 4) Rate nativo del equipo con el formato de la pista: aquí todavía no hay
+    //    conversión de muestras, sólo de rate en el HAL (se informa como !passthrough
+    //    porque nosotros resampleamos). Sólo si el modo no es estricto. Se prueban
+    //    **pocos** candidatos (idea de BitChord, `MAX_RATE_ATTEMPTS = 3`): cada intento
+    //    abre un stream real en el hilo de apertura y un DAC que niega exclusivo los
+    //    niega todos, así que encadenar seis sólo demora el arranque.
+    if (!config.strictBitPerfect) {
+        const int32_t rates[] = {48000, 44100, 96000, 192000};
+        int attempts = 0;
+        for (int32_t rate : rates) {
+            if (rate == sourceRate_) continue;
+            if (attempts >= MAX_RATE_ATTEMPTS) break;
+            ++attempts;
+            last = openStream(sourceFormat_, rate, sourceChannels_,
+                              looseSharing, oboe::PerformanceMode::LowLatency);
+            if (last == oboe::Result::OK) {
+                logI("rate de fallback aceptado: %s @ %d (fuente %d Hz)",
+                     formatName(sourceFormat_), rate, sourceRate_);
+                return last;
+            }
+        }
+
+        // 5) Formato nativo del equipo. Se codifica desde el float interno, así que
+        //    el resultado sigue siendo de alta calidad (redondeo, sin doble conversión).
+        const PcmFormat formats[] = {PcmFormat::kI32, PcmFormat::kI24, PcmFormat::kI16,
+                                     PcmFormat::kF32};
+        for (PcmFormat format : formats) {
+            if (format == sourceFormat_) continue;
+            last = openStream(format, sourceRate_, sourceChannels_,
+                              looseSharing, oboe::PerformanceMode::LowLatency);
+            if (last == oboe::Result::OK) {
+                logI("formato de fallback aceptado: %s @ %d (fuente %s)",
+                     formatName(format), sourceRate_, formatName(sourceFormat_));
+                return last;
+            }
+        }
+    }
+    return last;
+}
+
+oboe::Result AudioEngine::open(const EngineConfig& config) {
+    // El hilo anterior debe haber terminado ANTES de tomar el mutex: si se uniera con
+    // el mutex en la mano, y ese hilo estuviera esperándolo para publicar su resultado,
+    // ambos se bloquearían (deadlock).
+    joinOpenThread();
+
+    {
+        std::lock_guard<std::mutex> guard(controlMutex_);
+        closeLocked();   // sin join: ya se hizo arriba
+
+        sourceFormat_ = config.sourceFormat;
+        sourceChannels_ = config.sourceChannels > 0 ? config.sourceChannels : 2;
+        sourceRate_ = config.sourceSampleRate > 0 ? config.sourceSampleRate : 48000;
+        deviceId_ = config.deviceId;
+        errorCode_.store(0, std::memory_order_relaxed);
+        underruns_.store(0, std::memory_order_relaxed);
+        resetStreamAccounting();
+        pendingConfig_ = config;
+        openOutcome_.store(0, std::memory_order_relaxed);
+        openPending_.store(true, std::memory_order_release);
+    }
+
+    logI("open (async): source=%s %d Hz %d ch strict=%d exclusiveOnly=%d requireDevice=%d "
+         "buffer=%dms device=%d",
+         formatName(config.sourceFormat),
+         config.sourceSampleRate > 0 ? config.sourceSampleRate : 48000,
+         config.sourceChannels > 0 ? config.sourceChannels : 2,
+         config.strictBitPerfect ? 1 : 0, config.requireExclusive ? 1 : 0,
+         config.requireDevice ? 1 : 0, config.bufferMs, config.deviceId);
+
+    openThread_ = std::thread([this] { openThreadMain(); });
+
+    // Se devuelve OK en el sentido de "la configuración quedó aceptada": el resultado
+    // real de la apertura se consulta con awaitOpen() (o en el primer write/start, que
+    // es donde Media3 puede reaccionar con WriteException).
+    return oboe::Result::OK;
+}
+
+/**
+ * Cuerpo de la apertura, en su propio hilo. Nunca toca `stream_` sin el mutex de
+ * control, y publica el resultado en `openOutcome_` para que el productor lo vea.
+ */
+void AudioEngine::openThreadMain() {
+    oboe::Result result = oboe::Result::ErrorNull;
+
+    const EngineConfig config = pendingConfig_;
+    std::shared_ptr<oboe::AudioStream> stream;
+    {
+        std::lock_guard<std::mutex> guard(controlMutex_);
+        if (!openPending_.load(std::memory_order_acquire)) {
+            openOutcome_.store(static_cast<int32_t>(oboe::Result::ErrorNull),
+                               std::memory_order_release);
+            return;
+        }
+        // Reservar el estado de diagnóstico antes de abrir.
+        deviceId_ = config.deviceId;
+        result = tryOpenCandidates(config);
+        if (result != oboe::Result::OK && deviceId_ > 0 && !config.requireDevice) {
+            logW("el dispositivo %d no se pudo abrir; se reintenta con el predeterminado",
+                 deviceId_);
+            deviceId_ = 0;
+            result = tryOpenCandidates(config);
+        }
+        if (result == oboe::Result::OK) {
+            stream = stream_;
+            finalizeOpen(config);
+        } else {
+            logE("no se pudo abrir ningún stream: %s", oboe::convertToText(result));
+            errorCode_.store(static_cast<int32_t>(result), std::memory_order_relaxed);
+        }
+    }
+    openOutcome_.store(static_cast<int32_t>(result), std::memory_order_release);
+    openPending_.store(false, std::memory_order_release);
+}
+
+void AudioEngine::joinOpenThread() {
+    if (openThread_.joinable()) {
+        openThread_.join();
+    }
+}
+
+bool AudioEngine::awaitOpen(int32_t timeoutMs) {
+    const int64_t deadline = nowNanos() + static_cast<int64_t>(timeoutMs) * 1000000LL;
+    while (openPending_.load(std::memory_order_acquire)) {
+        if (nowNanos() >= deadline) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const int32_t outcome = openOutcome_.load(std::memory_order_acquire);
+    if (outcome != 0) {
+        errorCode_.store(outcome, std::memory_order_relaxed);
+        return false;
+    }
+    return stream_ != nullptr;
+}
+
 void AudioEngine::finalizeOpen(const EngineConfig& config) {
-    streamFormat_ = static_cast<int32_t>(stream_->getFormat() == oboe::AudioFormat::I16 ? PcmFormat::kI16
-                     : stream_->getFormat() == oboe::AudioFormat::I24 ? PcmFormat::kI24
-                     : stream_->getFormat() == oboe::AudioFormat::I32 ? PcmFormat::kI32
-                                                                     : PcmFormat::kF32);
+    streamFormat_ = static_cast<int32_t>(fromOboeFormat(stream_->getFormat()));
     streamRate_ = stream_->getSampleRate();
     streamChannels_ = stream_->getChannelCount();
     streamFrameBytes_ = streamChannels_ * bytesPerSample(static_cast<PcmFormat>(streamFormat_));
     if (streamFrameBytes_ <= 0) streamFrameBytes_ = 4;
     apiCode_ = stream_->getAudioApi() == oboe::AudioApi::AAudio ? 0 : 1;
     exclusive_ = stream_->getSharingMode() == oboe::SharingMode::Exclusive;
+    mmap_ = false;
+#ifdef AUDIOENGINE_HAVE_OBOE_EXTENSIONS
+    mmap_ = oboe::OboeExtensions::isMMapUsed(stream_.get());
+#endif
+    deviceId_ = stream_->getDeviceId() > 0 ? stream_->getDeviceId() : deviceId_;
 
     passthrough_ = static_cast<PcmFormat>(streamFormat_) == sourceFormat_ &&
                    streamRate_ == sourceRate_ &&
@@ -457,65 +639,94 @@ void AudioEngine::finalizeOpen(const EngineConfig& config) {
     resampler_.configure(sourceRate_, streamRate_, streamChannels_);
     volumeApplied_ = volume_.load(std::memory_order_relaxed);
 
+    // El camino directo sólo es válido si no hay nada que transformar. Con
+    // `fades` activo el callback escala la señal (fundido de entrada/salida), así que
+    // el bit-perfect real exige fundidos apagados — igual que el volumen al 100 %.
+    directPath_ = passthrough_ && !config.fades;
+
     // Fundidos: 25 ms de entrada y 60 ms de salida. Con fades apagados la señal sale
     // intacta desde el primer frame (modo purista).
-    fades_ = config.fades;
-    fadeInFrames_ = fades_ ? std::max(24, streamRate_ * 25 / 1000) : 0;
-    fadeOutFrames_ = fades_ ? std::max(48, streamRate_ * 60 / 1000) : 0;
-    rearmFrames_ = fades_ ? std::max(16, streamRate_ * 12 / 1000) : 0;
-    gain_ = fades_ ? 0.0f : 1.0f;
+    fades_.store(config.fades, std::memory_order_relaxed);
+    const bool fades = config.fades;
+    fadeInFrames_.store(fades ? std::max(24, streamRate_ * 25 / 1000) : 0,
+                        std::memory_order_relaxed);
+    fadeOutFrames_.store(fades ? std::max(48, streamRate_ * 60 / 1000) : 0,
+                         std::memory_order_relaxed);
+    rearmFrames_.store(fades ? std::max(16, streamRate_ * 12 / 1000) : 0,
+                       std::memory_order_relaxed);
+    gain_ = fades ? 0.0f : 1.0f;
     gainStep_ = 0.0f;
     stopAfterFade_ = false;
     fadeRequest_.store(kFadeNone, std::memory_order_relaxed);
     holding_.store(false, std::memory_order_relaxed);
+    endOfStream_.store(false, std::memory_order_relaxed);
 
     // Reparto de buffers, que es lo que define la velocidad percibida:
-    //  - ABAJO (AAudio) el buffer más chico posible: 2 ráfagas. Es lo que se tira
-    //    cuando hay un salto y lo que hay que rellenar después; si fuera de 250 ms,
-    //    cada skip se sentiría como un microsilencio.
+    //  - ABAJO (AAudio) el buffer más chico posible: 1-2 ráfagas. Es lo que se tira
+    //    cuando hay un salto y lo que hay que rellenar después.
     //  - ARRIBA (nuestro anillo) el buffer grande del ajuste "Buffer de salida": ahí
     //    vive la estabilidad, y limpiarlo es instantáneo porque es memoria nuestra.
     const int32_t burst = stream_->getFramesPerBurst() > 0 ? stream_->getFramesPerBurst() : 192;
     const int32_t capacity = stream_->getBufferCapacityInFrames();
-    // Exclusivo (MMAP): 2 ráfagas, el mínimo recomendado por Oboe y lo más rápido de
-    // vaciar. Compartido: 3, porque ahí abajo hay un mezclador que ya suma latencia y
-    // conviene un poco de colchón.
-    int32_t hwFrames = std::max(exclusive_ ? burst * 2 : burst * 3, burst);
-    if (capacity > 0) hwFrames = std::min(capacity, hwFrames);
-    if (hwFrames > 0) {
-        stream_->setBufferSizeInFrames(hwFrames);
+    int32_t requestedFrames = exclusive_ ? burst * 2 : burst * 3;
+    if (mmap_) requestedFrames = burst;      // MMAP: una ráfaga ya es suficiente
+    requestedFrames = std::max(requestedFrames, burst);
+    if (capacity > 0) requestedFrames = std::min(capacity, requestedFrames);
+    int32_t actualFrames = requestedFrames;
+    if (requestedFrames > 0) {
+        stream_->setBufferSizeInFrames(requestedFrames);
+        const int32_t actual = stream_->getBufferSizeInFrames();
+        if (actual > 0) actualFrames = actual;
     }
-    hardwareBufferFrames_ = hwFrames;
+    hardwareBufferFrames_.store(actualFrames, std::memory_order_relaxed);
 
     // Cuánto audio hace falta para arrancar el stream: dos ráfagas o 20 ms, lo que
     // sea mayor. Arrancar con el anillo vacío sólo produce silencio y xruns.
-    const int32_t targetBufferMs = std::max(40, config.bufferMs);
-    prerollFrames_ = std::max(burst * 2, streamRate_ * 20 / 1000);
+    // Preroll: con `prerollMs` configurado se respeta (los modos "sin cortes" bajan a una
+    // ráfaga para arrancar de inmediato); si no, el de siempre (2 ráfagas o 20 ms).
+    const int32_t configuredPrerollMs = config.prerollMs;
+    const int32_t prerollFromMs = configuredPrerollMs >= 0
+            ? std::max(burst, streamRate_ * configuredPrerollMs / 1000)
+            : std::max(burst * 2, streamRate_ * 20 / 1000);
+    prerollFrames_.store(prerollFromMs, std::memory_order_relaxed);
     startPending_.store(false, std::memory_order_relaxed);
 
     // Ring: 4 x buffer, mínimo 256 KB, máximo 4 MB.
     const size_t bytesPerSecond = static_cast<size_t>(streamRate_) *
                                   static_cast<size_t>(streamFrameBytes_);
-    size_t ringBytes = bytesPerSecond * static_cast<size_t>(std::max(targetBufferMs, 200)) / 1000 * 4;
+    const int32_t bufferMs = std::max(config.bufferMs, 200);
+    size_t ringBytes = bytesPerSecond * static_cast<size_t>(bufferMs) / 1000 * 4;
     ringBytes = std::max<size_t>(ringBytes, 1u << 18);
     ringBytes = std::min<size_t>(ringBytes, 1u << 22);
     ring_.resize(ringBytes);
-    pending_.clear();
 
     logI("opened: api=%d format=%s rate=%d ch=%d burst=%d hwBuffer=%d ring=%zuKB preroll=%d "
-         "exclusive=%d passthrough=%d",
+         "exclusive=%d mmap=%d passthrough=%d",
          apiCode_, formatName(static_cast<PcmFormat>(streamFormat_)), streamRate_,
-         streamChannels_, burst, hardwareBufferFrames_, ringBytes / 1024, prerollFrames_,
-         exclusive_ ? 1 : 0, passthrough_ ? 1 : 0);
+         streamChannels_, burst, actualFrames, ringBytes / 1024,
+         prerollFrames_.load(std::memory_order_relaxed), exclusive_ ? 1 : 0, mmap_ ? 1 : 0,
+         passthrough_ ? 1 : 0);
 }
 
 oboe::Result AudioEngine::close() {
-    if (stream_) {
-        stream_->close();
+    // Fuera del mutex: el hilo de apertura puede estar esperándolo.
+    joinOpenThread();
+    std::lock_guard<std::mutex> guard(controlMutex_);
+    closeLocked();
+    return oboe::Result::OK;
+}
+
+void AudioEngine::closeLocked() {
+    openPending_.store(false, std::memory_order_release);
+    {
+        std::shared_ptr<oboe::AudioStream> stream = stream_;
         stream_.reset();
+        if (stream) {
+            stream->requestStop();
+            stream->close();
+        }
     }
     ring_.clear();
-    pending_.clear();
     srcFloats_.clear();
     resampled_.clear();
     mapped_.clear();
@@ -525,12 +736,26 @@ oboe::Result AudioEngine::close() {
     streamRate_ = 0;
     streamChannels_ = 0;
     passthrough_ = true;
+    mmap_ = false;
+    exclusive_ = false;
     fadeRequest_.store(kFadeNone, std::memory_order_relaxed);
     holding_.store(true, std::memory_order_relaxed);
+    startPending_.store(false, std::memory_order_relaxed);
+    endOfStream_.store(false, std::memory_order_relaxed);
     gain_ = 1.0f;
     gainStep_ = 0.0f;
     stopAfterFade_ = false;
-    return oboe::Result::OK;
+    resetStreamAccounting();
+}
+
+void AudioEngine::resetStreamAccounting() {
+    timestampAnchorNanos_.store(0, std::memory_order_relaxed);
+    timestampAnchorFrames_.store(0, std::memory_order_relaxed);
+    framesConsumed_.store(0, std::memory_order_relaxed);
+    framesQueued_.store(0, std::memory_order_relaxed);
+    framesDropped_.store(0, std::memory_order_relaxed);
+    lastLatencyFrames_.store(0, std::memory_order_relaxed);
+    lastPositionFrames_.store(0, std::memory_order_relaxed);
 }
 
 oboe::Result AudioEngine::setStreamState(int32_t target) {
@@ -549,10 +774,41 @@ oboe::Result AudioEngine::setStreamState(int32_t target) {
     return result;
 }
 
+bool AudioEngine::waitForState(std::initializer_list<oboe::StreamState> states,
+                               int32_t timeoutMs) {
+    if (!stream_) return false;
+    const int64_t deadline = nowNanos() + static_cast<int64_t>(timeoutMs) * 1000000LL;
+    oboe::StreamState current = stream_->getState();
+    for (;;) {
+        for (oboe::StreamState wanted : states) {
+            if (current == wanted) return true;
+        }
+        if (current == oboe::StreamState::Closed || current == oboe::StreamState::Disconnected) {
+            return false;
+        }
+        const int64_t remainingNs = deadline - nowNanos();
+        if (remainingNs <= 0) return false;
+        const int64_t sliceNs = std::min<int64_t>(remainingNs, 5 * 1000000LL);
+        oboe::StreamState nextState = current;
+        if (stream_->waitForStateChange(current, &nextState, sliceNs) != oboe::Result::OK) {
+            // Timeout del slice o stream cerrado: se reevalúa el estado real.
+            if (stream_->getState() == current && deadline - nowNanos() <= 0) return false;
+        }
+        current = nextState;
+    }
+}
+
 oboe::Result AudioEngine::start() {
+    if (openPending_.load(std::memory_order_acquire) && !awaitOpen()) {
+        return static_cast<oboe::Result>(errorCode_.load(std::memory_order_relaxed));
+    }
+    std::lock_guard<std::mutex> guard(controlMutex_);
     // El fundido de entrada lo aplica el callback: acá sólo se pide.
-    fadeRequest_.store(kFadeIn, std::memory_order_release);
+    fadeRequest_.store(fades_.load(std::memory_order_relaxed) ? kFadeIn : kFadeNone,
+                       std::memory_order_release);
     holding_.store(false, std::memory_order_release);
+    endOfStream_.store(false, std::memory_order_release);
+    stopAfterFade_ = false;
     if (!stream_) return oboe::Result::ErrorInvalidState;
     // No se arranca "en seco": se arranca cuando el anillo ya tiene con qué sonar.
     startPending_.store(true, std::memory_order_release);
@@ -566,7 +822,8 @@ oboe::Result AudioEngine::maybeStart() {
         return oboe::Result::OK;
     }
     const size_t needBytes =
-            static_cast<size_t>(prerollFrames_) * static_cast<size_t>(streamFrameBytes_);
+            static_cast<size_t>(prerollFrames_.load(std::memory_order_relaxed)) *
+            static_cast<size_t>(streamFrameBytes_);
     if (needBytes > 0 && ring_.availableToRead() < needBytes) {
         return oboe::Result::OK;   // todavía no hay datos: se reintenta desde writePacked
     }
@@ -575,6 +832,7 @@ oboe::Result AudioEngine::maybeStart() {
 }
 
 oboe::Result AudioEngine::pause() {
+    std::lock_guard<std::mutex> guard(controlMutex_);
     startPending_.store(false, std::memory_order_release);
     if (!stream_) return oboe::Result::ErrorInvalidState;
     if (stream_->getState() != oboe::StreamState::Started) {
@@ -582,59 +840,277 @@ oboe::Result AudioEngine::pause() {
         fadeRequest_.store(kFadeNone, std::memory_order_release);
         return oboe::Result::OK;
     }
-    if (!fades_) {
+    if (!fades_.load(std::memory_order_relaxed)) {
         fadeRequest_.store(kFadeNone, std::memory_order_release);
         return setStreamState(1);
     }
     // 60 ms de rampa y el callback se detiene solo (DataCallbackResult::Stop).
-    fadeRequest_.store(kFadeOutAndStop, std::memory_order_release);
+    fadeRequest_.store(kFadeOutAndHold, std::memory_order_release);
     return oboe::Result::OK;
 }
 
 oboe::Result AudioEngine::stop() {
+    std::lock_guard<std::mutex> guard(controlMutex_);
     startPending_.store(false, std::memory_order_release);
     if (!stream_) return oboe::Result::ErrorInvalidState;
+
+    // `AudioOutput.stop()` de Media3 significa "deja sonar lo que queda y para"
+    // (`DefaultAudioSink.playToEndOfStream()` llama a `stop()`). Por eso NO se vacía
+    // el anillo ni se pide requestStop(): el callback sigue vaciando el ring y se
+    // detiene él mismo (DataCallbackResult::Stop) cuando el DAC ya lo consumió.
+    // Si acá se llamara requestStop(), el HAL descartaría el buffer que todavía no
+    // sonó y se cortarían muestras al final de cada pista.
+    endOfStream_.store(true, std::memory_order_release);
     if (stream_->getState() != oboe::StreamState::Started) {
-        fadeRequest_.store(kFadeNone, std::memory_order_release);
+        // Ya está detenido: nada que drenar.
+        holding_.store(true, std::memory_order_relaxed);
         return oboe::Result::OK;
     }
-    if (!fades_) {
-        fadeRequest_.store(kFadeNone, std::memory_order_release);
-        return setStreamState(2);
+    if (ring_.availableToRead() == 0) {
+        holding_.store(true, std::memory_order_relaxed);
+        return oboe::Result::OK;   // el callback parará en el próximo bloque
     }
-    fadeRequest_.store(kFadeOutAndStop, std::memory_order_release);
+    // Fade de salida corto SOLO al final del stream (60 ms). Con fades apagados no se
+    // toca la señal: se deja que el callback agote el anillo tal cual.
+    if (fades_.load(std::memory_order_relaxed)) {
+        fadeRequest_.store(kFadeOutAndHold, std::memory_order_release);
+    }
     return oboe::Result::OK;
 }
 
 oboe::Result AudioEngine::flush() {
+    return flushInternal(/*waitForHardware=*/true);
+}
+
+oboe::Result AudioEngine::flushForTransition() {
+    return flushInternal(/*waitForHardware=*/false);
+}
+
+oboe::Result AudioEngine::flushInternal(bool waitForHardware) {
+    std::lock_guard<std::mutex> guard(controlMutex_);
+    startPending_.store(false, std::memory_order_release);
+    endOfStream_.store(false, std::memory_order_release);
+    holding_.store(true, std::memory_order_relaxed);
+    stopAfterFade_ = false;
+
+    // 1) Los datos propios se descartan siempre: es memoria nuestra y es instantáneo.
+    const size_t dropped = ring_.availableToRead();
     ring_.clear();
-    pending_.clear();
     resampler_.reset();
-    streamFramesConsumed_.store(0, std::memory_order_relaxed);
-    // Salto o cambio de pista: el contenido nuevo entra con un fundido corto en vez
-    // de aparecer a full en medio de una muestra.
-    fadeRequest_.store(fades_ ? kFadeRearm : kFadeNone, std::memory_order_release);
-    if (stream_ && stream_->getState() != oboe::StreamState::Started) {
+    if (streamFrameBytes_ > 0) {
+        framesDropped_.fetch_add(static_cast<int64_t>(dropped / streamFrameBytes_),
+                                 std::memory_order_relaxed);
+    }
+    resetStreamAccounting();
+
+    if (!stream_) return oboe::Result::OK;
+
+    const oboe::StreamState current = stream_->getState();
+    if (current == oboe::StreamState::Closed || current == oboe::StreamState::Disconnected) {
         return oboe::Result::OK;
     }
-    return setStreamState(3);
+
+    // 2) AAudio sólo acepta requestFlush() en OPEN/PAUSED/STOPPED/FLUSHED, así que se
+    //    pausa primero y se espera PAUSED (antes se llamaba desde STARTED, donde la
+    //    petición no tiene efecto y el HAL podía seguir sonando lo viejo tras un seek).
+    if (current == oboe::StreamState::Started ||
+        current == oboe::StreamState::Starting ||
+        current == oboe::StreamState::Pausing ||
+        current == oboe::StreamState::Flushing) {
+        if (setStreamState(1) != oboe::Result::OK) {
+            setStreamState(2);
+        }
+        if (waitForHardware) {
+            if (!waitForState({oboe::StreamState::Paused, oboe::StreamState::Stopped}, 120)) {
+                logW("flush: el stream no llegó a PAUSED; se descarta la operación");
+            }
+        }
+    }
+
+    const oboe::StreamState ready = stream_->getState();
+    oboe::Result result = oboe::Result::OK;
+    if (ready == oboe::StreamState::Paused || ready == oboe::StreamState::Stopped ||
+        ready == oboe::StreamState::Open) {
+        result = setStreamState(3);
+        if (result == oboe::Result::OK && waitForHardware) {
+            waitForState({oboe::StreamState::Flushed, oboe::StreamState::Paused}, 120);
+        }
+    } else if (ready != oboe::StreamState::Flushed && waitForHardware) {
+        result = oboe::Result::ErrorInvalidState;
+        logW("flush: estado inesperado %d", static_cast<int32_t>(ready));
+    }
+
+    // 3) El stream queda en PAUSED (no FLUSHED) porque es el estado desde el que
+    //    `play()` puede reanudar sin reabrir: Media3 reutiliza el mismo AudioOutput
+    //    después de un seek, y un stream FLUSHED no arranca con requestStart().
+    const oboe::StreamState afterFlush = stream_->getState();
+    if (afterFlush != oboe::StreamState::Paused) {
+        if (afterFlush == oboe::StreamState::Flushed) {
+            setStreamState(1);   // Flushed -> Paused (válido y poco costoso)
+            if (waitForHardware) waitForState({oboe::StreamState::Paused}, 60);
+        } else if (afterFlush == oboe::StreamState::Started) {
+            setStreamState(1);
+            waitForState({oboe::StreamState::Paused}, 60);
+        }
+    }
+
+    // 4) Estado limpio de la señal: el próximo arranque entra con fundido corto.
+    gain_ = fades_.load(std::memory_order_relaxed) ? 0.0f : 1.0f;
+    gainStep_ = 0.0f;
+    fadeRequest_.store(fades_.load(std::memory_order_relaxed) ? kFadeRearm : kFadeNone,
+                       std::memory_order_release);
+    return result;
+}
+
+bool AudioEngine::drain(int32_t timeoutMs) {
+    const int64_t deadline = nowNanos() + static_cast<int64_t>(timeoutMs) * 1000000LL;
+    for (;;) {
+        if (stream_ == nullptr) return true;
+        const int64_t queued = framesQueued_.load(std::memory_order_relaxed);
+        if (queued <= 0) return true;
+        if (positionFrames() >= queued) return true;
+        if (nowNanos() >= deadline) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+}
+
+void AudioEngine::setVolume(float volume) {
+    volume_.store(std::min(std::max(volume, 0.0f), 1.0f), std::memory_order_relaxed);
+}
+
+void AudioEngine::setVolumeCurve(int32_t curve) {
+    volumeCurve_.store(curve == 1 ? 1 : 0, std::memory_order_relaxed);
+}
+
+float AudioEngine::targetGain() const {
+    const float volume = volume_.load(std::memory_order_relaxed);
+    if (volumeCurve_.load(std::memory_order_relaxed) == 0) return volume;
+    // Curva perceptual: la sensación de volumen del oído es aproximadamente logarítmica,
+    // así que una recta en el deslizador suena como "nada, nada, todo". Con v^2,5 el
+    // recorrido se reparte parejo. Al 100 % el resultado es exactamente 1.0, así que el
+    // camino bit-perfect no se toca.
+    return std::pow(volume, 2.5f);
+}
+
+void AudioEngine::setFadesEnabled(bool enabled) {
+    if (!enabled) {
+        fades_.store(false, std::memory_order_relaxed);
+        gain_ = 1.0f;
+        gainStep_ = 0.0f;
+        stopAfterFade_ = false;
+    }
+}
+
+void AudioEngine::updatePlayoutPosition(bool forceZeroLatency) {
+    if (!stream_) {
+        lastPositionFrames_.store(framesConsumed_.load(std::memory_order_relaxed),
+                                  std::memory_order_relaxed);
+        return;
+    }
+    const int64_t consumed = framesConsumed_.load(std::memory_order_relaxed);
+    int64_t latencyFrames = lastLatencyFrames_.load(std::memory_order_relaxed);
+
+    if (!forceZeroLatency && stream_->getState() == oboe::StreamState::Started) {
+        int64_t hardwarePosition = 0;
+        int64_t hardwareTime = 0;
+        if (stream_->getTimestamp(CLOCK_MONOTONIC, &hardwarePosition, &hardwareTime) ==
+            oboe::Result::OK) {
+            const int64_t measured = consumed - hardwarePosition;
+            const int64_t upperBound =
+                    static_cast<int64_t>(hardwareBufferFrames_.load(std::memory_order_relaxed)) +
+                    framesQueued_.load(std::memory_order_relaxed);
+            // Filtro: la latencia de MMAP es de pocas ráfagas; una lectura absurda
+            // (hardwarePosition atrasado tras un flush) no debe arrastrar el reloj.
+            if (measured >= -static_cast<int64_t>(streamRate_) &&
+                measured <= std::max<int64_t>(upperBound, streamRate_)) {
+                latencyFrames = std::max<int64_t>(0, measured);
+                lastLatencyFrames_.store(latencyFrames, std::memory_order_relaxed);
+
+                // Ancla del HAL: se guarda (frames presentados, instante del reloj).
+                // `hardwarePosition` es monótono dentro del stream: si retrocede, el HAL
+                // re-ancló (o el stream se reinició) y hay que descartar la referencia
+                // vieja, no "corregir" el reloj hacia atrás.
+                const int64_t anchorFrames =
+                        timestampAnchorFrames_.load(std::memory_order_relaxed);
+                if (hardwarePosition >= anchorFrames) {
+                    timestampAnchorFrames_.store(hardwarePosition, std::memory_order_relaxed);
+                    timestampAnchorNanos_.store(hardwareTime, std::memory_order_relaxed);
+                } else {
+                    logW("timestamp del HAL retrocedió (%lld < %lld): se re-ancla",
+                         static_cast<long long>(hardwarePosition),
+                         static_cast<long long>(anchorFrames));
+                    timestampAnchorFrames_.store(hardwarePosition, std::memory_order_relaxed);
+                    timestampAnchorNanos_.store(hardwareTime, std::memory_order_relaxed);
+                }
+            }
+        } else {
+            // Entre refrescos del timestamp: se extrapola desde el ancla con el reloj
+            // del sistema, que avanza suave, en vez de dejar la posición clavada hasta
+            // la próxima ráfaga del HAL (eso es el "paso a pasitos" de la barra).
+            const int64_t anchorNanos = timestampAnchorNanos_.load(std::memory_order_relaxed);
+            const int64_t now = nowNanos();
+            if (anchorNanos > 0 && now > anchorNanos && streamRate_ > 0) {
+                const int64_t elapsedFrames =
+                        (now - anchorNanos) * static_cast<int64_t>(streamRate_) / 1000000000LL;
+                const int64_t presented = timestampAnchorFrames_.load(std::memory_order_relaxed) +
+                                          elapsedFrames;
+                // Nunca por delante de lo que el callback ya consumió.
+                const int64_t clamped = std::min(presented, consumed);
+                const int64_t extrapolated = consumed - clamped;
+                if (extrapolated >= 0 && extrapolated <=
+                        std::max<int64_t>(static_cast<int64_t>(hardwareBufferFrames_.load(
+                                                  std::memory_order_relaxed)) * 2,
+                                          static_cast<int64_t>(streamRate_) / 10)) {
+                    latencyFrames = extrapolated;
+                }
+            }
+        }
+    }
+    if (forceZeroLatency) latencyFrames = 0;
+    int64_t position = consumed - latencyFrames;
+    position = std::max<int64_t>(0, std::min(position, consumed));
+    int64_t previous = lastPositionFrames_.load(std::memory_order_relaxed);
+    // La posición de un mismo stream no puede retroceder: eso confundiría al sink.
+    if (position < previous) position = previous;
+    lastPositionFrames_.store(position, std::memory_order_relaxed);
+}
+
+int64_t AudioEngine::positionFrames() {
+    updatePlayoutPosition(false);
+    return lastPositionFrames_.load(std::memory_order_relaxed);
+}
+
+int64_t AudioEngine::positionMicros() {
+    const int64_t frames = positionFrames();
+    if (streamRate_ <= 0) return 0;
+    // Se devuelve en el dominio temporal del ORIGEN (lo que espera Media3: microsegundos
+    // de pista), no en el del stream, para que el resampleo no desplace el reloj.
+    const int64_t rate = sourceRate_ > 0 ? sourceRate_ : streamRate_;
+    const int64_t sourceFrames = frames * rate / streamRate_;
+    return sourceFrames * 1000000LL / rate;
+}
+
+int64_t AudioEngine::latencyMicros() {
+    if (streamRate_ <= 0) return -1;
+    if (!stream_) return -1;
+    updatePlayoutPosition(false);
+    const int64_t frames = lastLatencyFrames_.load(std::memory_order_relaxed);
+    return frames * 1000000LL / streamRate_;
+}
+
+int64_t AudioEngine::sourceFramesQueued() const {
+    const int64_t queued = framesQueued_.load(std::memory_order_relaxed);
+    if (streamRate_ <= 0 || sourceRate_ <= 0 || streamRate_ == sourceRate_) return queued;
+    return queued * sourceRate_ / streamRate_;
+}
+
+bool AudioEngine::endOfStreamReached() const {
+    if (!endOfStream_.load(std::memory_order_acquire)) return false;
+    return ring_.availableToRead() == 0;
 }
 
 oboe::StreamState AudioEngine::state() const {
     return stream_ ? stream_->getState() : oboe::StreamState::Closed;
-}
-
-int64_t AudioEngine::sourceFramesConsumed() const {
-    const int64_t streamFrames = streamFramesConsumed_.load(std::memory_order_relaxed);
-    if (streamRate_ <= 0 || sourceRate_ <= 0 || streamRate_ == sourceRate_) return streamFrames;
-    return static_cast<int64_t>(static_cast<double>(streamFrames) *
-                                static_cast<double>(sourceRate_) / static_cast<double>(streamRate_));
-}
-
-void AudioEngine::setVolume(float volume) {
-    if (volume < 0.0f) volume = 0.0f;
-    if (volume > 1.0f) volume = 1.0f;
-    volume_.store(volume, std::memory_order_relaxed);
 }
 
 StreamInfo AudioEngine::info() const {
@@ -643,18 +1119,27 @@ StreamInfo AudioEngine::info() const {
     info.sourceFormat = static_cast<int32_t>(sourceFormat_);
     info.sourceSampleRate = sourceRate_;
     info.sourceChannels = sourceChannels_;
-    info.volumePercent = static_cast<int32_t>(volume_.load(std::memory_order_relaxed) * 100.0f + 0.5f);
+    info.volumePercent = static_cast<int32_t>(
+            volume_.load(std::memory_order_relaxed) * 100.0f + 0.5f);
     info.format = streamFormat_;
     info.sampleRate = streamRate_;
     info.channels = streamChannels_;
     info.deviceId = stream_ ? stream_->getDeviceId() : deviceId_;
     info.errorCode = errorCode_.load(std::memory_order_relaxed);
+    info.latencyMicros = streamRate_ > 0
+            ? lastLatencyFrames_.load(std::memory_order_relaxed) * 1000000LL / streamRate_
+            : -1;
+    info.mmap = mmap_;
     if (stream_) {
         info.framesPerBurst = stream_->getFramesPerBurst();
         info.bufferFrames = stream_->getBufferSizeInFrames();
         info.exclusive = exclusive_;
         info.passthrough = passthrough_;
-        info.bitPerfect = exclusive_ && passthrough_;
+        // Bit-perfect de verdad: stream exclusivo, misma pista sin conversión y ruta
+        // directa (sin fundidos ni volumen digital). Es el mismo criterio que usa el
+        // lado Kotlin (`EngineInfo.bitPerfect`), pero evaluado donde importa: el motor.
+        info.bitPerfect = exclusive_ && passthrough_ && directPath_ &&
+                          volumeApplied_ == 1.0f;
         const auto xRuns = stream_->getXRunCount();
         const int64_t nativeXRuns = xRuns.error() == oboe::Result::OK ? xRuns.value() : 0;
         info.xRuns = static_cast<int32_t>(
@@ -664,9 +1149,16 @@ StreamInfo AudioEngine::info() const {
 }
 
 size_t AudioEngine::writePacked(const uint8_t* data, size_t byteCount) {
-    if (data == nullptr || byteCount == 0 || !stream_) return 0;
+    if (data == nullptr || byteCount == 0) return 0;
 
-    // Si el play quedó esperando datos, este es el momento de arrancar.
+    // La apertura del stream corre en su propio hilo: si todavía está en curso se
+    // espera un máximo acotado (la primera vez), y si falló se publica el error para
+    // que el sink pueda reconstruirse en vez de reintentar para siempre.
+    if (openPending_.load(std::memory_order_acquire) && !awaitOpen()) {
+        return 0;
+    }
+    if (!stream_) return 0;
+
     const size_t accepted = writeToRing(data, byteCount);
     if (startPending_.load(std::memory_order_acquire)) {
         maybeStart();
@@ -675,25 +1167,56 @@ size_t AudioEngine::writePacked(const uint8_t* data, size_t byteCount) {
 }
 
 size_t AudioEngine::writeToRing(const uint8_t* data, size_t byteCount) {
-    // Si quedó cola del bloque anterior, primero hay que colocarla.
-    if (!pending_.empty()) {
-        const size_t n = ring_.write(pending_.data(), pending_.size());
-        if (n > 0) pending_.erase(pending_.begin(), pending_.begin() + static_cast<long>(n));
-        if (!pending_.empty()) return 0;
+    const size_t frameBytes = streamFrameBytes_ > 0 ? static_cast<size_t>(streamFrameBytes_) : 4;
+    // Camino directo (byte a byte, sin decodificar a float ni re-cuantizar). Además de
+    // la señal intacta hace falta que ningún fundido esté en curso: un fundido tiene que
+    // escalar muestras, y hacerlo en float re-cuantiza el bloque.
+    const bool plainCopy = passthrough_ &&
+            directPath_ &&
+            !fadeRequest_.load(std::memory_order_relaxed) &&
+            gain_ == 1.0f &&
+            volumeApplied_ == 1.0f &&
+            volume_.load(std::memory_order_relaxed) == 1.0f;
+    if (plainCopy) {
+        // Camino bit-perfect: sólo se aceptan frames completos que ya quepan. Nunca
+        // queda una cola parcial en el ring ni se guardan bytes de un bloque anterior.
+        const size_t frames = byteCount / frameBytes;
+        if (frames == 0) return 0;
+        const size_t want = frames * frameBytes;
+        const size_t fit = std::min(want, ring_.freeSpace() / frameBytes * frameBytes);
+        if (fit == 0) return 0;
+        const size_t written = ring_.write(data, fit);
+        framesQueued_.fetch_add(static_cast<int64_t>(written / frameBytes),
+                                std::memory_order_relaxed);
+        return written;
     }
 
-    if (passthrough_ && volumeApplied_ == 1.0f && volume_.load(std::memory_order_relaxed) == 1.0f) {
-        return ring_.write(data, byteCount);
-    }
-    return writeConverted(data, byteCount);
-}
-
-size_t AudioEngine::writeConverted(const uint8_t* data, size_t byteCount) {
+    // Camino con transformación. Regla de oro (la usa `DefaultAudioSink` al contar
+    // frames: `bytesWritten = bytesRemaining - buffer.remaining()`): NUNCA hay que
+    // consumir entrada que no se pueda procesar y contabilizar ya mismo. Por eso se
+    // acepta sólo la entrada cuya salida GARANTIZADA cabe en el ring; el resto se
+    // devuelve como no aceptado y Media3 reenvía exactamente ese tramo.
     const int32_t srcFrameBytes = bytesPerSample(sourceFormat_) * sourceChannels_;
     if (srcFrameBytes <= 0) return 0;
-    const int32_t inFrames = static_cast<int32_t>(byteCount / static_cast<size_t>(srcFrameBytes));
-    if (inFrames <= 0) return 0;
-    const int32_t inSamples = inFrames * sourceChannels_;
+    const size_t srcFrameBytesSz = static_cast<size_t>(srcFrameBytes);
+    const size_t freeFrames = ring_.freeSpace() / frameBytes;
+    // Dos frames de margen: el filtro puede producir hasta un frame extra por
+    // bloque por el redondeo de fase.
+    if (freeFrames <= 2) return 0;
+
+    size_t inFrames = byteCount / srcFrameBytesSz;
+    if (inFrames == 0) return 0;
+    // Presupuesto: cuánta entrada cabe (sin y con resampleo). El margen de 2 frames
+    // absorbe el frame extra que el filtro puede producir en el borde del bloque.
+    const double step = resampler_.bypass() ? 1.0
+                                            : (resampler_.step() > 0.0 ? resampler_.step() : 1.0);
+    const size_t allowedIn = static_cast<size_t>(
+            static_cast<double>(freeFrames - 2) * step);
+    if (allowedIn == 0) return 0;
+    inFrames = std::min(inFrames, allowedIn);
+
+    const size_t inBytes = inFrames * srcFrameBytesSz;
+    const int32_t inSamples = static_cast<int32_t>(inFrames * static_cast<size_t>(sourceChannels_));
 
     if (srcFloats_.size() < static_cast<size_t>(inSamples)) {
         srcFloats_.resize(static_cast<size_t>(inSamples));
@@ -701,13 +1224,14 @@ size_t AudioEngine::writeConverted(const uint8_t* data, size_t byteCount) {
     decodeToFloat(data, inSamples, sourceFormat_, srcFloats_.data());
 
     // Volumen digital con rampa dentro del bloque (evita el clic al moverlo).
-    const float target = volume_.load(std::memory_order_relaxed);
+    const float target = targetGain();
     if (target != 1.0f || volumeApplied_ != 1.0f) {
         const float start = volumeApplied_;
-        const int32_t framesTotal = inFrames;
+        const int32_t framesTotal = static_cast<int32_t>(inFrames);
         for (int32_t i = 0; i < framesTotal; ++i) {
             const float g = framesTotal > 1
-                    ? start + (target - start) * (static_cast<float>(i) / static_cast<float>(framesTotal - 1))
+                    ? start + (target - start) *
+                              (static_cast<float>(i) / static_cast<float>(framesTotal - 1))
                     : target;
             float* frame = srcFloats_.data() + static_cast<size_t>(i) * sourceChannels_;
             for (int32_t c = 0; c < sourceChannels_; ++c) frame[c] *= g;
@@ -716,26 +1240,31 @@ size_t AudioEngine::writeConverted(const uint8_t* data, size_t byteCount) {
     }
 
     const float* source = srcFloats_.data();
-    int32_t frames = inFrames;
+    int32_t frames = static_cast<int32_t>(inFrames);
 
-    // Mapeo de canales si el stream abrió con otro número (raro pero posible).
+    // Mapeo de canales si el stream abrió con otro número.
     if (sourceChannels_ != streamChannels_) {
-        if (mapped_.size() < static_cast<size_t>(frames * streamChannels_)) {
-            mapped_.resize(static_cast<size_t>(frames * streamChannels_));
+        if (mapped_.size() < static_cast<size_t>(frames) * streamChannels_) {
+            mapped_.resize(static_cast<size_t>(frames) * streamChannels_);
         }
         for (int32_t i = 0; i < frames; ++i) {
             const float* s = source + static_cast<size_t>(i) * sourceChannels_;
             float* d = mapped_.data() + static_cast<size_t>(i) * streamChannels_;
             for (int32_t c = 0; c < streamChannels_; ++c) {
-                d[c] = c < sourceChannels_
-                        ? s[c]
-                        : (sourceChannels_ > 0 ? s[c % sourceChannels_] : 0.0f);
+                if (c < sourceChannels_) {
+                    d[c] = s[c];
+                } else if (sourceChannels_ == 1) {
+                    d[c] = s[0];       // mono replicado: -3 dB no, misma señal
+                } else {
+                    d[c] = 0.0f;       // canal que la pista no tiene: silencio, no basura
+                }
             }
         }
         source = mapped_.data();
     }
 
     const float* finalFloat = source;
+    int32_t outFrames = frames;
     if (!resampler_.bypass()) {
         const double st = resampler_.step() > 0.0 ? resampler_.step() : 1.0;
         const int32_t capacityFrames =
@@ -743,22 +1272,30 @@ size_t AudioEngine::writeConverted(const uint8_t* data, size_t byteCount) {
         if (resampled_.size() < static_cast<size_t>(capacityFrames) * streamChannels_) {
             resampled_.resize(static_cast<size_t>(capacityFrames) * streamChannels_);
         }
-        const int32_t outFrames = resampler_.process(source, frames, resampled_.data(), capacityFrames);
-        if (outFrames <= 0) return byteCount;
+        outFrames = resampler_.process(source, frames, resampled_.data(), capacityFrames);
         finalFloat = resampled_.data();
-        frames = outFrames;
     }
 
-    const int32_t outSamples = frames * streamChannels_;
-    const size_t outBytes = static_cast<size_t>(outSamples) * bytesPerSample(static_cast<PcmFormat>(streamFormat_));
-    if (outBytes_.size() < outBytes) outBytes_.resize(outBytes);
-    encodeFromFloat(finalFloat, outSamples, static_cast<PcmFormat>(streamFormat_), outBytes_.data());
-
-    const size_t written = ring_.write(outBytes_.data(), outBytes);
-    if (written < outBytes) {
-        pending_.assign(outBytes_.begin() + static_cast<long>(written), outBytes_.end());
+    const int32_t outSamples = outFrames * streamChannels_;
+    if (outSamples > 0) {
+        const size_t outBytes = static_cast<size_t>(outSamples) *
+                                static_cast<size_t>(bytesPerSample(
+                                        static_cast<PcmFormat>(streamFormat_)));
+        if (outBytes_.size() < outBytes) outBytes_.resize(outBytes);
+        encodeFromFloat(finalFloat, outSamples, static_cast<PcmFormat>(streamFormat_),
+                        outBytes_.data());
+        // Longitud LÓGICA del bloque actual (outBytes), nunca `outBytes_.size()`:
+        // ese era el bug que encolaba bytes del bloque anterior.
+        const size_t written = std::min(outBytes, ring_.freeSpace() / frameBytes * frameBytes);
+        const size_t queued = written > 0 ? ring_.write(outBytes_.data(), written) : 0;
+        framesQueued_.fetch_add(static_cast<int64_t>(queued / frameBytes),
+                                std::memory_order_relaxed);
+        if (queued < outBytes) {
+            framesDropped_.fetch_add(static_cast<int64_t>((outBytes - queued) / frameBytes),
+                                     std::memory_order_relaxed);
+        }
     }
-    return byteCount;
+    return inBytes;
 }
 
 oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream* /*stream*/,
@@ -773,19 +1310,21 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream* /*stream*/
     switch (request) {
         case kFadeIn:
             holding_.store(false, std::memory_order_relaxed);
-            if (fades_ && gain_ < 1.0f) {
-                gainStep_ = (1.0f - gain_) / static_cast<float>(fadeInFrames_ > 0 ? fadeInFrames_ : 1);
+            if (fades_.load(std::memory_order_relaxed) && gain_ < 1.0f) {
+                const int32_t frames = fadeInFrames_.load(std::memory_order_relaxed);
+                gainStep_ = (1.0f - gain_) / static_cast<float>(frames > 0 ? frames : 1);
             } else {
                 gain_ = 1.0f;
                 gainStep_ = 0.0f;
             }
             break;
-        case kFadeOutAndStop:
-            if (fades_ && gain_ > 0.0f) {
-                gainStep_ = -gain_ / static_cast<float>(fadeOutFrames_ > 0 ? fadeOutFrames_ : 1);
+        case kFadeOutAndHold:
+            if (fades_.load(std::memory_order_relaxed) && gain_ > 0.0f) {
+                const int32_t frames = fadeOutFrames_.load(std::memory_order_relaxed);
+                gainStep_ = -gain_ / static_cast<float>(frames > 0 ? frames : 1);
                 stopAfterFade_ = true;
             } else {
-                // Sin fundido pendiente: se para de una.
+                // Sin fundido pendiente: se descarta el resto y se para.
                 gain_ = 0.0f;
                 gainStep_ = 0.0f;
                 holding_.store(true, std::memory_order_relaxed);
@@ -793,23 +1332,32 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream* /*stream*/
             }
             break;
         case kFadeRearm:
-            // Salto / cambio de pista: entra suave aunque el stream sea el mismo.
-            if (fades_) {
-                // Salto: fundido corto (12 ms), que se percibe como continuo y tapa
-                // el click del corte sin agregar latencia.
+            if (fades_.load(std::memory_order_relaxed)) {
                 gain_ = 0.0f;
-                gainStep_ = 1.0f / static_cast<float>(rearmFrames_ > 0 ? rearmFrames_ : 1);
+                const int32_t frames = rearmFrames_.load(std::memory_order_relaxed);
+                gainStep_ = 1.0f / static_cast<float>(frames > 0 ? frames : 1);
             }
             break;
         default:
             break;
     }
 
-    // 2) En pausa (después del fundido) no se consume nada: el remanente del anillo
-    //    sigue ahí para cuando se reanude.
+    // 2) Guardia de parada: si el callback ya había parado (Stop) y quedó audio
+    //    encolado, se reanuda con Start. Si no hay datos nuevos, se devuelve Stop (sin
+    //    memcpy: el HAL no consume ese buffer) y no se gasta CPU en silencio.
     if (holding_.load(std::memory_order_relaxed)) {
-        std::memset(out, 0, byteCount);
-        return oboe::DataCallbackResult::Continue;
+        if (!endOfStream_.load(std::memory_order_acquire) &&
+            ring_.availableToRead() >= static_cast<size_t>(streamFrameBytes_) &&
+            !startPending_.load(std::memory_order_acquire)) {
+            holding_.store(false, std::memory_order_relaxed);
+            if (fades_.load(std::memory_order_relaxed) && gain_ < 1.0f) {
+                const int32_t frames = fadeInFrames_.load(std::memory_order_relaxed);
+                gainStep_ = (1.0f - gain_) / static_cast<float>(frames > 0 ? frames : 1);
+            }
+        } else {
+            std::memset(out, 0, byteCount);
+            return oboe::DataCallbackResult::Stop;
+        }
     }
 
     // 3) Copia pura (sin ganancia) salvo durante una rampa de unos pocos milisegundos.
@@ -822,14 +1370,28 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream* /*stream*/
     if (gotFrames > 0 && (gain_ != 1.0f || gainStep_ != 0.0f)) {
         applyGainRamp(out, gotFrames);
     }
-    streamFramesConsumed_.fetch_add(std::max(0, gotFrames), std::memory_order_relaxed);
+    framesConsumed_.fetch_add(std::max(0, gotFrames), std::memory_order_relaxed);
 
-    // 4) Fundido de salida terminado (o ya no queda nada que fundir): la parada la
-    //    pide el propio callback, que es el único que puede hacerlo en tiempo real.
-    if (stopAfterFade_ && (gain_ <= 0.0f || gotFrames <= 0)) {
-        gain_ = 0.0f;
-        gainStep_ = 0.0f;
-        stopAfterFade_ = false;
+    // 4) Parada decidida por el callback, que es el único que sabe cuánto falta.
+    //    - En pausa (`stopAfterFade_`): se para al terminar el fade, sin importar
+    //      cuánto quede en el anillo (esos datos se guardan para reanudar).
+    //    - Fin de stream (Media3 llamó a stop()): se vacía TODO el anillo y se para
+    //      recién cuando no quedan bytes. Ese es el contrato de `AudioOutput.stop()`.
+    const bool ringEmpty = ring_.availableToRead() == 0;
+    if (stopAfterFade_) {
+        if (gain_ <= 0.0f || ringEmpty) {
+            gain_ = 0.0f;
+            gainStep_ = 0.0f;
+            stopAfterFade_ = false;
+            holding_.store(true, std::memory_order_relaxed);
+            return oboe::DataCallbackResult::Stop;
+        }
+        return oboe::DataCallbackResult::Continue;
+    }
+    if (ringEmpty) {
+        // No queda audio: se para siempre (aunque no haya llegado stop() todavía).
+        // Con datos nuevos, el próximo bloque usa DataCallbackResult::Start, así que
+        // esto no rompe el gapless: la parada es "sin datos", no "fin de stream".
         holding_.store(true, std::memory_order_relaxed);
         return oboe::DataCallbackResult::Stop;
     }
@@ -844,8 +1406,6 @@ void AudioEngine::applyGainRamp(uint8_t* data, int32_t frames) {
     const bool up = step > 0.0f;
     float g = gain_;
 
-    // Rampa lineal. En cuanto la ganancia vuelve a 1.0 el resto del bloque queda
-    // intacto: así el estado estacionario sigue siendo bit-exacto.
     const auto advance = [&]() {
         g += step;
         if (up && g > 1.0f) g = 1.0f;
@@ -922,6 +1482,8 @@ void AudioEngine::applyGainRamp(uint8_t* data, int32_t frames) {
 void AudioEngine::onErrorAfterClose(oboe::AudioStream* /*stream*/, oboe::Result error) {
     logE("stream error after close: %s (posible DAC desconectado)", oboe::convertToText(error));
     errorCode_.store(static_cast<int32_t>(error), std::memory_order_relaxed);
+    holding_.store(true, std::memory_order_relaxed);
+    startPending_.store(false, std::memory_order_relaxed);
 }
 
 } // namespace audio

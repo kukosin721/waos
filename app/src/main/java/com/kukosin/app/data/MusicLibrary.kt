@@ -38,6 +38,21 @@ object MusicLibrary {
         queryAudio(context).forEach { addTrack(it) }
         queryFiles(context).forEach { addTrack(it) }
 
+        // Lo ya sondeado se aplica acá mismo: son dos `stat` por archivo (sin abrirlos),
+        // así la biblioteca arranca con duración/sample rate/bitrate correctos y la UI no
+        // tiene que esperar al sondeo completo para mostrar la lista bien.
+        ensureCacheLoaded(context)
+        val cached = byKey.mapValues { (_, track) ->
+            val stored = probeCache[track.uri.toString()] ?: return@mapValues track
+            val stamp = probeStamps[track.uri.toString()]
+            val current = LibraryCacheStore.fingerprintFromDisk(track)
+            // Misma validación que `probeCached`: si el archivo cambió, no se usa.
+            if (stamp != null && current != null && !stamp.matches(current)) track
+            else LibraryCacheStore.applyCached(track, stored)
+        }
+        byKey.clear()
+        byKey.putAll(cached)
+
         byKey.values.sortedBy { it.title.lowercase() }
     }
 
@@ -49,22 +64,40 @@ object MusicLibrary {
 
     private val probeCache = ConcurrentHashMap<String, Track>()
 
+    /** Firma de disco de cada entrada de [probeCache] (para invalidar una por una). */
+    private val probeStamps = ConcurrentHashMap<String, DiskFingerprint>()
+
     @Volatile
     private var cacheLoaded = false
 
     @Volatile
     private var lastSaveAtMs = 0L
 
+    /**
+     * Sondea **sólo lo que falta**.
+     *
+     * Con la caché aplicada en [scan], acá ya llegan las pistas completas: antes se abría
+     * cada archivo otra vez en cada arranque (decenas de segundos con una biblioteca
+     * grande) aunque no hubiera cambiado nada.
+     */
     suspend fun enrich(context: Context, tracks: List<Track>): List<Track> = withContext(Dispatchers.IO) {
         ensureCacheLoaded(context)
         if (tracks.isEmpty()) return@withContext tracks
+        val pending = tracks.indices.filter { index ->
+            val track = tracks[index]
+            track.sampleRate <= 0 || track.durationMs <= 0 || track.bitDepth <= 0
+        }
+        if (pending.isEmpty()) return@withContext tracks
         val enriched = arrayOfNulls<Track>(tracks.size)
         val permits = Semaphore(PROBE_CONCURRENCY)
         coroutineScope {
-            tracks.forEachIndexed { index, track ->
+            pending.forEach { index ->
+                val track = tracks[index]
                 launch {
                     permits.withPermit {
-                        enriched[index] = probeCached(context, track)
+                        // `probeCached` devuelve la pista técnica cacheada; sus etiquetas
+                        // están vacías a propósito, así que se combinan con las del escaneo.
+                        enriched[index] = LibraryCacheStore.applyCached(track, probeCached(context, track))
                     }
                 }
             }
@@ -73,11 +106,17 @@ object MusicLibrary {
         List(tracks.size) { index -> enriched[index] ?: tracks[index] }
     }
 
-    private fun ensureCacheLoaded(context: Context) {
+    private suspend fun ensureCacheLoaded(context: Context) {
         if (cacheLoaded) return
         cacheLoaded = true
+        // `load` ya descarta las entradas cuyo archivo cambió: acá sólo se rellena.
         val stored = LibraryCacheStore.load(context)
-        if (stored.isNotEmpty()) probeCache.putAll(stored)
+        if (stored.isNotEmpty()) {
+            probeCache.putAll(stored)
+            stored.values.forEach { track ->
+                LibraryCacheStore.fingerprintFromDisk(track)?.let { probeStamps[track.uri.toString()] = it }
+            }
+        }
     }
 
     private fun persistCacheIfDue(context: Context) {
@@ -87,17 +126,37 @@ object MusicLibrary {
         LibraryCacheStore.save(context, probeCache)
     }
 
+    /**
+     * Sondeo con caché **validada por archivo**.
+     *
+     * La clave sigue siendo la uri, pero una entrada sólo se reutiliza si el tamaño y la
+     * fecha de modificación del archivo coinciden con los del momento en que se sondeó.
+     * Si el usuario reemplazó el archivo (mismo nombre, otro contenido), se vuelve a
+     * sondear en vez de mostrar duración/bitrate/carátula del anterior.
+     */
     private fun probeCached(context: Context, track: Track): Track {
         val key = track.uri.toString()
-        probeCache[key]?.let { return it }
+        val fingerprint = LibraryCacheStore.fingerprintFromDisk(track)
+        val cached = probeCache[key]
+        if (cached != null) {
+            val cachedStamp = probeStamps[key]
+            // Sin firma (streams, SAF sin path) se confía en la uri: no hay con qué validar.
+            if (fingerprint == null || cachedStamp == null || cachedStamp.matches(fingerprint)) {
+                return cached
+            }
+            probeCache.remove(key)
+            probeStamps.remove(key)
+        }
         val probed = runCatching { probe(context, track) }.getOrDefault(track)
         probeCache[key] = probed
+        if (fingerprint != null) probeStamps[key] = fingerprint
         return probed
     }
 
     /** "Rescan": tira la caché en memoria y en disco. */
     fun invalidateProbeCache(context: Context?) {
         probeCache.clear()
+        probeStamps.clear()
         cacheLoaded = false
         lastSaveAtMs = 0L
         if (context != null) LibraryCacheStore.clear(context)

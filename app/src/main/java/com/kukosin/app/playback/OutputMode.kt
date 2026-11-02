@@ -1,26 +1,34 @@
 package com.kukosin.app.playback
 
 /**
- * Audio output path. Four routes with distinct semantics, not four interchangeable
+ * Audio output path. Five routes with distinct semantics, not five interchangeable
  * "drivers":
  *
- * | Mode              | Path                          | Volume       | Bit-perfect |
- * |-------------------|-------------------------------|--------------|-------------|
- * | DISABLED          | Android mixer                 | free         | never       |
- * | DIRECT_DRIVER     | exclusive + hardware volume   | on the DAC   | with DAC    |
- * | AAUDIO_EXCLUSIVE  | exclusive + digital volume    | in the app   | only at 100 % |
- * | USB_DAC           | exclusive, track format       | fixed at 100 % | yes       |
+ * | Mode              | Path                          | Volume         | Bit-perfect |
+ * |-------------------|-------------------------------|----------------|-------------|
+ * | AUTO              | Oboe, best available device   | on the device  | with a DAC  |
+ * | USB_DAC           | Oboe exclusive, track format  | fixed at 100 % | yes         |
+ * | DIRECT_DRIVER     | Oboe exclusive + hw volume    | on the DAC     | with DAC    |
+ * | AAUDIO_EXCLUSIVE  | Oboe exclusive + digital vol. | in the app     | only at 100 % |
+ * | DISABLED          | Android mixer (AudioTrack)    | free           | never       |
+ *
+ * [AUTO] is the default: playback always goes through the Oboe engine, which opens
+ * the output at the track's native sample rate and bit depth and falls back to a
+ * shared stream (or to its own polyphase conversion) only when the hardware cannot
+ * take the exact format. The three exclusive modes add a hard requirement on top.
  */
 enum class OutputMode(
     val label: String,
     val shortLabel: String,
     val description: String,
 ) {
-    DISABLED(
-        label = "Disabled",
-        shortLabel = "Mixer",
-        description = "Goes through the Android mixer: maximum compatibility, but the " +
-            "system may resample or apply effects. Not bit-perfect.",
+    AUTO(
+        label = "Automatic · Oboe",
+        shortLabel = "Oboe",
+        description = "Always plays through the Oboe engine on the best output available " +
+            "(USB DAC, line out, headphones or speaker). It opens each track at its native " +
+            "sample rate and bit depth and only converts when the hardware cannot take it, " +
+            "so audio never fails. The highest fidelity that works on every device.",
     ),
     USB_DAC(
         label = "USB DAC",
@@ -41,16 +49,24 @@ enum class OutputMode(
         description = "Opens the built-in output (jack or line) exclusively at each " +
             "track's sample rate. Volume is digital: bit-perfect only at 100 %.",
     ),
+    DISABLED(
+        label = "Disabled · Android mixer",
+        shortLabel = "Mixer",
+        description = "Escape hatch: goes through the Android mixer (AudioTrack) instead " +
+            "of Oboe. Maximum compatibility, but the system may resample or apply effects. " +
+            "Not bit-perfect.",
+    ),
     ;
 
-    /** ¿Usa el motor de Oboe? (DISABLED va por AudioTrack / mezclador del sistema). */
+    /** ¿Usa el motor de Oboe? (sólo DISABLED va por AudioTrack / mezclador del sistema). */
     val usesEngine: Boolean get() = this != DISABLED
 
     /** Modos que exigen stream exclusivo: si el HAL no lo da, se informa el error. */
-    val requiresExclusive: Boolean get() = this != DISABLED
+    val requiresExclusive: Boolean
+        get() = this == USB_DAC || this == DIRECT_DRIVER || this == AAUDIO_EXCLUSIVE
 
-    /** Sólo se puede elegir si hay un DAC conectado (el mezclador siempre está disponible). */
-    val requiresDac: Boolean get() = this != DISABLED
+    /** Sólo se puede elegir si hay un DAC conectado. AUTO y DISABLED siempre están disponibles. */
+    val requiresDac: Boolean get() = requiresExclusive
 
     /** Volumen fijo al 100 %: la señal no se toca ni se atenúa. */
     val locksVolume: Boolean get() = this == USB_DAC
@@ -58,8 +74,9 @@ enum class OutputMode(
     /** El volumen se aplica en la app (atenuación digital). */
     val usesDigitalVolume: Boolean get() = this == AAUDIO_EXCLUSIVE
 
-    /** El volumen se aplica sobre el dispositivo (hardware). */
-    val usesHardwareVolume: Boolean get() = this == DIRECT_DRIVER || this == USB_DAC
+    /** El volumen se aplica sobre el dispositivo (hardware), no sobre la muestra. */
+    val usesHardwareVolume: Boolean
+        get() = this == DIRECT_DRIVER || this == USB_DAC || this == AUTO
 
     /** A qué dispositivo apunta el modo. */
     val targetsUsb: Boolean get() = this == USB_DAC || this == DIRECT_DRIVER
@@ -72,16 +89,20 @@ enum class OutputMode(
     val volumeHint: String
         get() = when {
             locksVolume -> "Fixed volume at 100 % · adjust it on the DAC"
-            usesHardwareVolume -> "Volume in the DAC hardware"
+            usesHardwareVolume -> "Hardware volume · the samples are never attenuated"
             usesDigitalVolume -> "Digital volume (bit-perfect only at 100 %)"
             else -> "System volume"
         }
 
     companion object {
+        /**
+         * Orden de la UI: primero lo que funciona siempre, después lo exclusivo y al
+         * final la salida de emergencia.
+         */
         val entriesInOrder: List<OutputMode> =
-            listOf(DISABLED, USB_DAC, DIRECT_DRIVER, AAUDIO_EXCLUSIVE)
+            listOf(AUTO, USB_DAC, DIRECT_DRIVER, AAUDIO_EXCLUSIVE, DISABLED)
 
         fun fromName(name: String?): OutputMode =
-            entries.firstOrNull { it.name == name } ?: DISABLED
+            entries.firstOrNull { it.name == name } ?: AUTO
     }
 }

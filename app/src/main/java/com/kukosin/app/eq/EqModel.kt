@@ -8,7 +8,34 @@ import kotlin.math.abs
  * LOW_SHELF / HIGH_SHELF: shelves de primer orden en las puntas (no colorean el resto
  * del espectro). PEAK: campana constante-Q en el resto de las bandas.
  */
-enum class EqBandType { LOW_SHELF, PEAK, HIGH_SHELF }
+enum class EqBandType {
+    LOW_SHELF,
+    PEAK,
+    HIGH_SHELF,
+
+    /** Corte estrecho: mata un zumbido (50/60 Hz) sin tocar el resto. */
+    NOTCH,
+
+    /** Pasa-bajos: deja pasar todo lo que está por debajo de la frecuencia. */
+    LOW_PASS,
+
+    /** Pasa-altos: deja pasar todo lo que está por encima de la frecuencia. */
+    HIGH_PASS,
+    ;
+
+    /** Sólo estas bandas responden a un cambio de ganancia (dB). */
+    val usesGain: Boolean get() = this == LOW_SHELF || this == PEAK || this == HIGH_SHELF
+
+    val label: String
+        get() = when (this) {
+            LOW_SHELF -> "Low shelf"
+            PEAK -> "Peak"
+            HIGH_SHELF -> "High shelf"
+            NOTCH -> "Notch"
+            LOW_PASS -> "Low pass"
+            HIGH_PASS -> "High pass"
+        }
+}
 
 /**
  * Una banda del ecualizador.
@@ -22,7 +49,14 @@ data class EqBand(
     val gainDb: Float,
     val q: Float = 1.41f,
     val type: EqBandType = EqBandType.PEAK,
-)
+) {
+    /** `true` si la banda aporta ganancia (las de corte no). */
+    val isGainBand: Boolean get() = type.usesGain
+
+    /** `true` si la banda está haciendo algo (corte activo o ganancia distinta de 0). */
+    val isActive: Boolean
+        get() = if (isGainBand) abs(gainDb) >= 0.05f else true
+}
 
 /**
  * Estado completo del ecualizador. Inmutable: cada cambio produce una copia nueva
@@ -42,7 +76,7 @@ data class EqSettings(
     val maxBoostDb: Float
         get() {
             var m = 0f
-            for (b in bands) if (b.gainDb > m) m = b.gainDb
+            for (b in bands) if (b.isGainBand && b.gainDb > m) m = b.gainDb
             return m
         }
 
@@ -51,7 +85,7 @@ data class EqSettings(
      * biquads que suenan y cacheado: la UI lo pide en cada muestra de la curva.
      */
     val curvePeakDb: Float by lazy {
-        if (bands.all { abs(it.gainDb) < 0.05f }) 0f
+        if (bands.none { it.isGainBand && abs(it.gainDb) >= 0.05f }) 0f
         else BiquadDesign.bandsPeakDb(bands, REFERENCE_SAMPLE_RATE).toFloat()
     }
 
@@ -61,9 +95,14 @@ data class EqSettings(
     /** Preamp realmente aplicado por la cadena: manual - headroom automático. */
     val effectivePreampDb: Float get() = preampDb - autoHeadroomDb
 
+    /** ¿Hay algún filtro de corte (notch / pasa-bajos / pasa-altos) en la cadena? */
+    val hasCutFilters: Boolean get() = bands.any { !it.isGainBand }
+
     /** ¿Está todo plano? (se puede saltar la cadena por completo). */
     val isFlat: Boolean
-        get() = abs(effectivePreampDb) < 0.05f && bands.all { abs(it.gainDb) < 0.05f }
+        get() = !hasCutFilters &&
+            abs(effectivePreampDb) < 0.05f &&
+            bands.all { abs(it.gainDb) < 0.05f }
 
     /** ¿Hay algo que procesar? (si no, bypass real: no se toca ni un bit). */
     val isProcessing: Boolean get() = enabled && !isFlat
@@ -88,8 +127,17 @@ data class EqSettings(
         copy(
             bands = bands.mapIndexed { i, b ->
                 if (i == index) {
-                    // Un shelf necesita una pendiente suave; una campana, una Q de octava.
-                    b.copy(type = type, q = if (type == EqBandType.PEAK) 1.41f else 0.71f)
+                    // Cada tipo tiene su Q natural: shelf suave, campana de octava y
+                    // cortes estrechos (notch) o de pendiente Butterworth (LP/HP).
+                    b.copy(
+                        type = type,
+                        q = when (type) {
+                            EqBandType.PEAK -> 1.41f
+                            EqBandType.NOTCH -> 8f
+                            EqBandType.LOW_PASS, EqBandType.HIGH_PASS -> 0.71f
+                            else -> 0.71f
+                        },
+                    )
                 } else {
                     b
                 }
@@ -164,8 +212,12 @@ object EqPresets {
 /** Aplica un preset sobre el estado actual conservando frecuencias/Q. */
 fun EqSettings.applyingPreset(preset: EqPresets.Preset): EqSettings = copy(
     bands = bands.mapIndexed { i, band ->
-        val g = preset.gainsDb.getOrElse(i) { 0f }
-        band.copy(gainDb = g.coerceIn(-EqSettings.MAX_GAIN_DB, EqSettings.MAX_GAIN_DB))
+        if (band.isGainBand) {
+            val g = preset.gainsDb.getOrElse(i) { 0f }
+            band.copy(gainDb = g.coerceIn(-EqSettings.MAX_GAIN_DB, EqSettings.MAX_GAIN_DB))
+        } else {
+            band   // un notch o un pasa-altos no forma parte de un preset de color
+        }
     },
     presetName = preset.name,
 )
